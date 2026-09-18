@@ -289,5 +289,38 @@ check("Every English translation preserves placeholder indices") {
     func tokens(_ s:String)->Set<String> { let ns=s as NSString; return Set(regex.matches(in:s,range:NSRange(location:0,length:ns.length)).map{ns.substring(with:$0.range)}) }
     return UILocalization.english.allSatisfy { tokens($0.key) == tokens($0.value) && !$0.value.isEmpty }
 }
+check("Background music and original-audio mute persist") {
+    var q=Project(); q.duration=2000; var m=BackgroundMusic(path:"中文 音乐.mp3",duration:4000); m.start=500; m.sourceStart=100; m.sourceEnd=1600; m.volume=0.4
+    q.backgroundMusic=[m]; q.muteVideoAudio=true; try q.validate()
+    let copy=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
+    return copy.music == [m] && copy.isVideoMuted && Project().music.isEmpty && !Project().isVideoMuted
+}
+check("Music validation rejects reversed ranges, invalid volume and duplicate IDs") {
+    var q=Project(); var m=BackgroundMusic(path:"a.mp3",duration:2000); m.sourceEnd=0; q.backgroundMusic=[m]
+    let reversed=rejects{try q.validate()}; m.sourceEnd=2000; m.volume = .nan; q.backgroundMusic=[m]
+    let volume=rejects{try q.validate()}; m.volume=1; q.backgroundMusic=[m,m]
+    return reversed && volume && rejects{try q.validate()}
+}
+check("Music split keeps source continuity, gain, video and captions") {
+    var q=p; var m=BackgroundMusic(path:"music.mp3",duration:8000); m.start=1000; m.sourceStart=2000; m.sourceEnd=5000; m.volume=0.25; q.backgroundMusic=[m]
+    let result=try q.cuttingMusic(m.id,at:2500)
+    return result.music.count==2 && result.music[0].id==m.id && result.music[1].id != m.id && result.music[0].sourceEnd==3500 && result.music[1].sourceStart==3500 && result.music[1].start==2500 && result.music[1].sourceEnd==5000 && result.music[1].volume==0.25 && result.cues==q.cues && result.clips==q.clips && result.duration==q.duration
+}
+check("Music trim left and right preserve absolute timeline and source positions") {
+    var q=p; var m=BackgroundMusic(path:"music.mp3",duration:8000); m.start=1000; m.sourceStart=2000; m.sourceEnd=5000; q.backgroundMusic=[m]
+    let left=try q.cuttingMusic(m.id,at:2500,removeBefore:true).music[0]
+    let right=try q.cuttingMusic(m.id,at:2500,removeBefore:false).music[0]
+    return left.start==2500 && left.sourceStart==3500 && left.sourceEnd==5000 && right.start==1000 && right.sourceStart==2000 && right.sourceEnd==3500
+}
+check("Music cuts reject endpoints, missing selection and playhead beyond video") {
+    var q=Project(); q.duration=2000; let m=BackgroundMusic(path:"music.mp3",duration:8000); q.backgroundMusic=[m]
+    return rejects{_ = try q.cuttingMusic(m.id,at:0)} && rejects{_ = try q.cuttingMusic(m.id,at:2000)} && rejects{_ = try q.cuttingMusic(m.id,at:3000)} && rejects{_ = try q.cuttingMusic(UUID(),at:1000)}
+}
+check("Long music retains full source range without extending video export duration") {
+    var q=Project(); q.duration=41000; var m=BackgroundMusic(path:"two minutes.mp3",duration:120000); m.start=5000; q.backgroundMusic=[m]
+    try q.validate()
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
+    return restored.music[0].sourceEnd==120000 && restored.music[0].duration==120000 && restored.timelineExtent==125000 && restored.duration==41000
+}
 print("\(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0:1)

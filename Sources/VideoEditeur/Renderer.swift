@@ -76,7 +76,7 @@ final class VideoExporter {
     private var isCancelled: Bool { lock.lock(); defer {lock.unlock()}; return cancelled }
     func run(project: Project, destination: URL, color: VideoColor = .sdr, progress: @escaping (Double)->Void) throws {
         try project.validate()
-        guard !project.clips.contains(where:{URL(fileURLWithPath:$0.path).resolvingSymlinksInPath().standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL}) else { throw SubtitleError.invalid(L("不能覆盖源视频")) }
+        guard !(project.clips.map(\.path)+project.music.map(\.path)).contains(where:{URL(fileURLWithPath:$0).resolvingSymlinksInPath().standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL}) else { throw SubtitleError.invalid(L("不能覆盖源视频")) }
         let supported=try MediaProbe.formats(project).0
         guard supported.contains(color) else { throw SubtitleError.invalid(L("素材色彩格式不一致，无法保真导出所选 HDR 格式")) }
         let edited=try EditedAsset(project:project,color:color,subtitles:true)

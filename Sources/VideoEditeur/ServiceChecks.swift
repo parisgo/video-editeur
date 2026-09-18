@@ -132,3 +132,17 @@ func runRegionColorChecks() throws {
     guard red.r>0.99,red.b<0.01,blue.b>0.99,blue.r<0.01,red.a==1,blue.a==1 else { throw SubtitleError.invalid("Point color orientation / bounds check failed") }
     print("PASS drag-start pixel color, bottom-left coordinates and edge clamping")
 }
+
+func runMusicChecks(directory: URL) throws {
+    var project=Project(); project.videoPath=directory.appendingPathComponent("video.mp4").path; project.duration=2000
+    var music=BackgroundMusic(path:directory.appendingPathComponent("背景 音乐.mp3").path,duration:3000); music.start=500; music.sourceStart=250; music.sourceEnd=2250; music.volume=0.5
+    project.backgroundMusic=[music]
+    let preview=try EditedAsset(project:project,color:.sdr,subtitles:false)
+    guard preview.asset.tracks(withMediaType:.audio).count==2,abs(CMTimeGetSeconds(preview.asset.duration)-2)<0.02 else { throw SubtitleError.invalid("Mixed preview tracks/duration failed") }
+    try VideoExporter().run(project:project,destination:directory.appendingPathComponent("mixed.mp4"),progress:{_ in})
+    project.muteVideoAudio=true
+    let muted=try EditedAsset(project:project,color:.sdr,subtitles:false)
+    guard muted.asset.tracks(withMediaType:.audio).count==1 else { throw SubtitleError.invalid("Original video audio was not removed") }
+    try VideoExporter().run(project:project,destination:directory.appendingPathComponent("muted.mp4"),progress:{_ in})
+    print("PASS music preview mix, clipped duration, original audio mute and both exports")
+}

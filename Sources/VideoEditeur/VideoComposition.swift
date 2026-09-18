@@ -106,7 +106,7 @@ struct EditedAsset {
             try holdFrame(sourceStart:CMTimeSubtract(CMTimeRangeGetEnd(range),sampleDuration),at:CMTimeAdd(CMTimeAdd(destination,leading),range.duration),duration:trailing)
             let outgoing=i+1<places.count ? places[i+1].clip.transition : 0
             layers.append(RenderLayer(trackID:target.trackID,transform:v.preferredTransform,placement:p,outgoing:outgoing))
-            if let a=source.tracks(withMediaType:.audio).first,let at=asset.addMutableTrack(withMediaType:.audio,preferredTrackID:kCMPersistentTrackID_Invalid) {
+            if !project.isVideoMuted,let a=source.tracks(withMediaType:.audio).first,let at=asset.addMutableTrack(withMediaType:.audio,preferredTrackID:kCMPersistentTrackID_Invalid) {
                 let r=CMTimeRangeGetIntersection(sourceRange,otherRange:a.timeRange)
                 if CMTimeGetSeconds(r.duration)>0 {
                     try at.insertTimeRange(r,of:a,at:CMTimeAdd(CMTime(value:p.start,timescale:1000),CMTimeSubtract(r.start,sourceRange.start)))
@@ -118,6 +118,16 @@ struct EditedAsset {
                     parameters.append(param)
                 }
             }
+        }
+        for music in project.music where music.start<project.duration {
+            let source=AVURLAsset(url:URL(fileURLWithPath:music.path))
+            guard let track=source.tracks(withMediaType:.audio).first,let target=asset.addMutableTrack(withMediaType:.audio,preferredTrackID:kCMPersistentTrackID_Invalid) else { throw SubtitleError.invalid(L("无法读取背景音乐：{0}",[music.path])) }
+            let requested=CMTimeRange(start:CMTime(value:music.sourceStart,timescale:1000),duration:CMTime(value:min(music.duration,project.duration-music.start),timescale:1000))
+            let range=CMTimeRangeGetIntersection(requested,otherRange:track.timeRange)
+            guard range.isValid,CMTimeGetSeconds(range.duration)>0 else { throw SubtitleError.invalid(L("背景音乐没有可用音频")) }
+            let start=CMTimeAdd(CMTime(value:music.start,timescale:1000),CMTimeSubtract(range.start,requested.start))
+            try target.insertTimeRange(range,of:track,at:start)
+            let parameter=AVMutableAudioMixInputParameters(track:target); parameter.setVolume(Float(music.volume),at:start); parameters.append(parameter)
         }
         audio.inputParameters=parameters
         video.customVideoCompositorClass=EditCompositor.self

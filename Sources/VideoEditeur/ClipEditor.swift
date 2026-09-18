@@ -7,12 +7,28 @@ extension EditorController {
     @objc func libraryDoubleClicked() { if showsMedia { editSelectedVideo() } }
     @objc func appendVideos() {
         guard !busy else { return }
-        let panel=NSOpenPanel(); panel.allowedContentTypes=[.movie]; panel.allowsMultipleSelection=true; panel.title=L("添加视频到当前时间轴")
+        let panel=NSOpenPanel(); panel.allowedContentTypes=[.movie,.audio]; panel.allowsMultipleSelection=true; panel.title=L("添加素材（视频或音乐）")
         guard panel.runModal() == .OK else { return }
+        pauseForEditing()
         do {
-            let additions=try panel.urls.map { url in VideoClip(path:url.path,duration:try MediaProbe(url.path).duration) }
-            let next=try project.replacingClips(project.clips+additions)
-            commit(next,name:L("添加视频")); if let id=additions.first?.id { selectVideoClip(id) }
+            var videos:[VideoClip]=[],sounds:[BackgroundMusic]=[]
+            for url in panel.urls {
+                let asset=AVURLAsset(url:url)
+                if !asset.tracks(withMediaType:.video).isEmpty { videos.append(VideoClip(path:url.path,duration:try MediaProbe(url.path).duration)) }
+                else {
+                    let seconds=CMTimeGetSeconds(asset.duration)
+                    guard !asset.tracks(withMediaType:.audio).isEmpty,seconds.isFinite,seconds>0,seconds<1e9 else { throw SubtitleError.invalid(L("无法读取背景音乐：{0}",[url.path])) }
+                    sounds.append(BackgroundMusic(path:url.path,duration:Int64(seconds*1000)))
+                }
+            }
+            var next=try videos.isEmpty ? project : project.replacingClips(project.clips+videos)
+            if next.videoClips == nil && next.videoPath.isEmpty { next.videoClips=[] }
+            for i in sounds.indices {
+                sounds[i].start=next.duration>0 ? min(current,next.duration-1) : 0
+            }
+            next.backgroundMusic=project.music+sounds
+            commit(next,name:L("添加素材"))
+            if project == next { if let id=sounds.last?.id { selectMusicClip(id) } else if let id=videos.first?.id { selectVideoClip(id) } }
         } catch { showError(error) }
     }
     func selectVideoClip(_ id: UUID) {
@@ -34,7 +50,7 @@ extension EditorController {
 
     func restoreEditedProject() {
         do {
-            var next=project
+            var next=project; next.videoClips=project.clips
             for clip in next.clips where !FileManager.default.fileExists(atPath:clip.path) {
                 let alert=NSAlert(); alert.messageText=L("找不到视频素材"); alert.informativeText=clip.path; alert.addButton(withTitle:L("重新定位")); alert.addButton(withTitle:L("稍后"))
                 guard alert.runModal() == .alertFirstButtonReturn else { refresh(); return }
@@ -44,16 +60,27 @@ extension EditorController {
                 guard abs(probe.duration-clip.sourceDuration)<=1000 else { throw SubtitleError.invalid(L("素材时长不匹配，请选择原视频")) }
                 for i in next.videoClips!.indices where next.videoClips![i].path == clip.path { next.videoClips![i].path=url.path }
             }
+            for music in next.music where !FileManager.default.fileExists(atPath:music.path) {
+                let alert=NSAlert(); alert.messageText=L("找不到背景音乐"); alert.informativeText=music.path; alert.addButton(withTitle:L("重新定位")); alert.addButton(withTitle:L("稍后"))
+                guard alert.runModal() == .alertFirstButtonReturn else { refresh(); return }
+                let panel=NSOpenPanel(); panel.allowedContentTypes=[.audio]
+                guard panel.runModal() == .OK,let url=panel.url else { return }
+                let asset=AVURLAsset(url:url),seconds=CMTimeGetSeconds(asset.duration)
+                guard !asset.tracks(withMediaType:.audio).isEmpty,seconds.isFinite,seconds>=Double(music.sourceEnd)/1000 else { throw SubtitleError.invalid(L("背景音乐没有可用音频")) }
+                for i in next.backgroundMusic!.indices where next.backgroundMusic![i].path == music.path { next.backgroundMusic![i].path=url.path }
+            }
             next.videoPath=next.clips.first?.path ?? ""; try installPreview(for:next); project=next; refresh(); scheduleSave()
         } catch { showError(error) }
     }
     var targetClip: VideoClip? { project.clips.first{$0.id == selectedClip} ?? project.placements.first{$0.start<=current && current<$0.end}?.clip ?? project.clips.first }
     @objc func splitSelectedVideo() {
+        if selectedMusic != nil { cutSelectedMusic(); return }
         guard !busy,let clip=targetClip else { return }
         pauseForEditing()
         do { commit(try project.splittingClip(clip.id,at:current),name:L("分割视频")) } catch { showError(error) }
     }
     func trimSelectedVideo(removeBefore: Bool) {
+        if selectedMusic != nil { cutSelectedMusic(removeBefore:removeBefore); return }
         guard !busy,let clip=targetClip else { return }
         pauseForEditing()
         do {
@@ -63,7 +90,9 @@ extension EditorController {
     }
     func refreshCutButtons() {
         let placement=targetClip.flatMap { clip in project.placements.first{$0.clip.id == clip.id} }
-        let inside=placement.map{current>$0.start && current<$0.end} ?? false
+        let inside: Bool
+        if let id=selectedMusic { inside=project.music.first(where:{$0.id == id}).map{current>$0.start && current<min(project.duration,$0.start+$0.duration)} ?? false }
+        else { inside=placement.map{current>$0.start && current<$0.end} ?? false }
         for name in ["splitVideo","trimVideoLeft","trimVideoRight"] {
             (bottom.subviews.first{$0.identifier?.rawValue == name} as? NSButton)?.isEnabled = !busy && inside
         }
@@ -80,11 +109,13 @@ extension EditorController {
         for i in clips.indices { clips[i].transition=i == 0 ? 0 : min(clips[i].transition,min(clips[i].duration,clips[i-1].duration)/2) }
     }
     @objc func deleteSelectedVideo() {
+        if selectedMusic != nil { deleteMusic(); return }
         guard !busy,let clip=targetClip else { return }
         var clips=project.clips.filter{$0.id != clip.id}; normalizeTransitions(&clips)
         do { commit(try project.replacingClips(clips),name:L("删除视频片段")); selectedClip=nil; timeline.selectedClip=nil } catch { showError(error) }
     }
     @objc func editSelectedVideo() {
+        if selectedMusic != nil { editMusic(); return }
         guard !busy,let original=targetClip else { return }
         pauseForEditing(); selectedClip=original.id; timeline.selectedClip=original.id; timeline.needsDisplay=true
         let alert=NSAlert(); alert.messageText=L("视频剪辑与特效")
@@ -126,7 +157,8 @@ extension EditorController {
         let destination=job.directory.appendingPathComponent("edited-audio.m4a")
         if FileManager.default.fileExists(atPath:destination.path) { return destination }
         DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue=L("正在混合剪辑音频…") }
-        let edited=try EditedAsset(project:project,color:.sdr,subtitles:false)
+        var speech=project; speech.backgroundMusic=nil; speech.muteVideoAudio=false
+        let edited=try EditedAsset(project:speech,color:.sdr,subtitles:false)
         guard !edited.asset.tracks(withMediaType:.audio).isEmpty else { throw SubtitleError.invalid(L("时间轴没有音轨，无法生成语音字幕")) }
         guard let session=AVAssetExportSession(asset:edited.asset,presetName:AVAssetExportPresetAppleM4A) else { throw SubtitleError.invalid(L("无法创建剪辑音频")) }
         let temporary=job.directory.appendingPathComponent("edited-audio-partial.m4a")

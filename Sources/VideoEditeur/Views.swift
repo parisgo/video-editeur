@@ -242,6 +242,11 @@ final class PreviewOverlay: NSView {
 final class TimelineView: NSView {
     var project=Project(); var current: Int64=0; var selected: UUID? { didSet { needsDisplay=true; window?.invalidateCursorRects(for:self) } }; var pointsPerSecond: CGFloat=65
     var clipThumbnails: [UUID:[NSImage?]]=[:]
+    var selectedMusic: UUID?
+    var selectMusic: ((UUID)->Void)?
+    var editMusic: (()->Void)?
+    var moveMusic: ((BackgroundMusic)->Void)?
+    private var musicDrag: (BackgroundMusic,CGFloat,Int)?
     var selectedClip: UUID?
     var selectVideo: ((UUID)->Void)?
     var editVideo: (()->Void)?
@@ -257,7 +262,7 @@ final class TimelineView: NSView {
     func x(_ ms: Int64) -> CGFloat { leading+CGFloat(ms)/1000*pointsPerSecond }
     func ms(_ x: CGFloat) -> Int64 { max(0,min(project.duration,Int64(max(0,x-leading)/pointsPerSecond*1000))) }
     var videoY: CGFloat { 139+CGFloat(project.tracks.count)*44 }
-    var contentHeight: CGFloat { videoY+66 }
+    var contentHeight: CGFloat { videoY+66+CGFloat(project.music.count)*44 }
     func rect(_ cue: Cue) -> CGRect {
         let row=cue.trackID.flatMap { id in project.tracks.firstIndex(where:{$0.id == id}) }.map{$0+2} ?? (cue.language == .fr ? 0 : 1)
         return CGRect(x:x(cue.start),y:47+CGFloat(row)*44,width:max(2,x(cue.end)-x(cue.start)),height:32)
@@ -284,7 +289,7 @@ final class TimelineView: NSView {
             (s as NSString).draw(in:rect,withAttributes:[.font:NSFont.monospacedSystemFont(ofSize:size,weight:.medium),.foregroundColor:color,.paragraphStyle:paragraph])
         }
         let step: Int = pointsPerSecond > 45 ? 1 : (pointsPerSecond > 15 ? 5 : 10)
-        let first=max(0,Int((dirtyRect.minX-leading)/pointsPerSecond)/step*step), last=min(Int(project.duration/1000)+1,Int((dirtyRect.maxX-leading)/pointsPerSecond)+1)
+        let first=max(0,Int((dirtyRect.minX-leading)/pointsPerSecond)/step*step), last=min(Int(project.timelineExtent/1000)+1,Int((dirtyRect.maxX-leading)/pointsPerSecond)+1)
         if first <= last { for sec in stride(from:first,through:last,by:step) {
             let px=x(Int64(sec)*1000); NSColor(white:0.23,alpha:1).setFill(); CGRect(x:px,y:28,width:1,height:bounds.height-28).fill()
             text(String(format:"%02d:%02d",sec/60,sec%60),CGRect(x:px+4,y:8,width:55,height:16))
@@ -343,13 +348,29 @@ final class TimelineView: NSView {
                 CGRect(x:handle.midX-1,y:handle.midY-6,width:2,height:12).fill()
             }
         }
+        for (i,music) in project.music.enumerated() {
+            let r=musicRect(music)
+            text(L("音乐")+" \(i+1)",CGRect(x:8,y:r.minY+8,width:leading-12,height:20),muted,10)
+            NSColor.systemGreen.withAlphaComponent(0.55).setFill(); NSBezierPath(roundedRect:r,xRadius:4,yRadius:4).fill()
+            text(URL(fileURLWithPath:music.path).lastPathComponent,r.insetBy(dx:7,dy:7),.white,11)
+            if music.id == selectedMusic { NSColor.white.setStroke(); let border=NSBezierPath(rect:r.insetBy(dx:1,dy:1)); border.lineWidth=2; border.stroke() }
+        }
         let px=x(current); accent.setFill(); CGRect(x:px,y:29,width:1.5,height:bounds.height-29).fill()
         let head=NSBezierPath(); head.move(to:CGPoint(x:px-5,y:25)); head.line(to:CGPoint(x:px+5,y:25)); head.line(to:CGPoint(x:px,y:33)); head.close(); head.fill()
+    }
+    func musicRect(_ music: BackgroundMusic) -> CGRect {
+        let index=project.music.firstIndex(where:{$0.id == music.id}) ?? 0
+        return CGRect(x:x(music.start),y:videoY+66+CGFloat(index)*44,width:max(2,x(music.start+music.duration)-x(music.start)),height:32)
     }
     override func mouseDown(with event: NSEvent) {
         let p=convert(event.locationInWindow,from:nil)
         guard editingEnabled else { return }
         window?.makeFirstResponder(self)
+        if let music=project.music.first(where:{ musicRect($0).contains(p) || (p.x<leading && (musicRect($0).minY...musicRect($0).maxY).contains(p.y)) }) {
+            if p.x>=leading { seek?(ms(p.x)) }; selectMusic?(music.id); selectedMusic=music.id
+            if event.clickCount == 2 { editMusic?(); return }
+            let r=musicRect(music); musicDrag=(music,p.x,p.x-r.minX<8 ? -1 : r.maxX-p.x<8 ? 1 : 0); needsDisplay=true; return
+        }
         if let p=project.placements.reversed().first(where:{CGRect(x:x($0.start),y:videoY,width:x($0.end)-x($0.start),height:55).contains(p)}) {
             selectVideo?(p.clip.id); selectedClip=p.clip.id
             let point=convert(event.locationInWindow,from:nil)
@@ -367,11 +388,19 @@ final class TimelineView: NSView {
             select?(cue.id); let r=rect(cue)
             let edge=min(7,r.width/3)
             drag=(cue,p.x,p.x-r.minX < edge ? -1 : (r.maxX-p.x < edge ? 1 : 0))
-        } else { seek?(ms(p.x)); onDeselect?() }
+        } else { seek?(ms(p.x)); if p.y>32 { onDeselect?() } }
     }
     override func mouseDragged(with event: NSEvent) {
         guard editingEnabled else { return }
         let p=convert(event.locationInWindow,from:nil)
+        if let (original,origin,mode)=musicDrag,let index=project.music.firstIndex(where:{$0.id == original.id}) {
+            let delta=Int64((p.x-origin)/pointsPerSecond*1000); var value=original
+            if mode == 0 { value.start=max(0,min(max(0,project.duration-1),original.start+delta)) }
+            else if mode == -1 {
+                let change=max(-min(original.start,original.sourceStart),min(original.duration-1,delta)); value.start+=change; value.sourceStart+=change
+            } else { value.sourceEnd=max(original.sourceStart+1,min(original.sourceDuration,original.sourceEnd+delta)) }
+            project.backgroundMusic?[index]=value; needsDisplay=true; return
+        }
         if let (original,origin,mode)=videoDrag {
             let delta=Int64((p.x-origin)/pointsPerSecond*1000)
             var clips=project.clips
@@ -390,6 +419,7 @@ final class TimelineView: NSView {
         project.cues[index]=cue; needsDisplay=true
     }
     override func mouseUp(with event: NSEvent) {
+        if let (music,_,_)=musicDrag,let value=project.music.first(where:{$0.id == music.id}) { musicDrag=nil; moveMusic?(value); return }
         if let (clip,_,_)=videoDrag,let value=project.clips.first(where:{$0.id == clip.id}) {
             videoDrag=nil; editVideoRange?(clip.id,value.sourceStart,value.sourceEnd); return
         }

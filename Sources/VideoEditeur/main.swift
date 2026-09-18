@@ -24,14 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let edit=menu(L("编辑")); item(edit,L("撤销"),#selector(EditorController.undoAction),"z",editor); item(edit,L("重做"),#selector(EditorController.redoAction),"z",editor,shift:true)
         edit.addItem(.separator()); item(edit,L("剪切"),#selector(NSText.cut(_:)),"x",nil); item(edit,L("复制"),#selector(NSText.copy(_:)),"c",nil); item(edit,L("粘贴"),#selector(NSText.paste(_:)),"v",nil); item(edit,L("全选"),#selector(NSText.selectAll(_:)),"a",nil)
         let clips=menu(L("视频剪辑"))
-        item(clips,L("添加视频到时间轴…"),#selector(EditorController.appendVideos),"i",editor)
+        item(clips,L("添加素材…"),#selector(EditorController.appendVideos),"i",editor)
         item(clips,L("框选区域去字"),#selector(EditorController.beginRegionErase),"",editor)
         item(clips,L("管理去字区域…"),#selector(EditorController.manageEraseRegions),"",editor)
         item(clips,L("裁剪与特效…"),#selector(EditorController.editSelectedVideo),"e",editor)
-        item(clips,L("在播放头分割视频"),#selector(EditorController.splitSelectedVideo),"b",editor)
+        item(clips,L("在播放头分割素材"),#selector(EditorController.splitSelectedVideo),"b",editor)
         item(clips,L("视频片段前移"),#selector(EditorController.moveVideoEarlier),"",editor)
         item(clips,L("视频片段后移"),#selector(EditorController.moveVideoLater),"",editor)
-        item(clips,L("删除视频片段"),#selector(EditorController.deleteSelectedVideo),"",editor)
+        item(clips,L("删除素材片段"),#selector(EditorController.deleteSelectedVideo),"",editor)
         let playback=menu(L("播放")); item(playback,L("播放 / 暂停（空格）"),#selector(EditorController.togglePlay),"",editor)
         let windowMenu=menu(L("窗口")); item(windowMenu,L("最小化"),#selector(NSWindow.miniaturize(_:)),"m",nil); NSApp.windowsMenu=windowMenu
         NSApp.mainMenu=main; NSApp.activate(ignoringOtherApps:true)
@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // CLI smoke-test hooks exercise the same renderer, exporter and generation pipeline as the app.
-if CommandLine.arguments.contains("--check-region-color") {
+if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--check-music" {
+    do { try runMusicChecks(directory:URL(fileURLWithPath:CommandLine.arguments[2])); exit(0) } catch { print(error); exit(1) }
+} else if CommandLine.arguments.contains("--check-region-color") {
     do { try runRegionColorChecks(); exit(0) } catch { print(error); exit(1) }
 } else if CommandLine.arguments.contains("--check-subtitle-alignment") {
     do { try runSubtitleAlignmentChecks(); exit(0) } catch { print(error); exit(1) }

@@ -10,6 +10,8 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     var eraseSampleID: UUID?
     var eraseSampleColor: RGBA?
     var thumbnailJob: TimelineThumbnailJob?
+    var selectedMusic: UUID?
+    let muteVideoButton=NSButton(checkboxWithTitle:L("静音原视频"),target:nil,action:nil)
     var selectedClip: UUID?
     var selected: UUID?
     var current: Int64=0
@@ -61,6 +63,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         let detail: String
         let language: Language?
         let trackID: UUID?
+        var musicID: UUID? = nil
         var clipID: UUID? = nil
         var isMedia: Bool { language == nil && trackID == nil }
         func contains(_ cue: Cue) -> Bool {
@@ -70,7 +73,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     var showsMedia: Bool { languageChoice.selectedSegment == 0 }
     var libraryEntries: [LibraryEntry] {
         if showsMedia {
-            return project.placements.enumerated().map { i,p in LibraryEntry(title:"\(i+1). \(URL(fileURLWithPath:p.clip.path).lastPathComponent)",detail:L("{0} · {1} 秒", [String(describing: SRT.timestamp(p.start).prefix(8)), String(describing: String(format:"%.2f",Double(p.clip.duration)/1000))]),language:nil,trackID:nil,clipID:p.clip.id) }
+            return project.placements.enumerated().map { i,p in LibraryEntry(title:"\(i+1). \(URL(fileURLWithPath:p.clip.path).lastPathComponent)",detail:L("{0} · {1} 秒", [String(describing: SRT.timestamp(p.start).prefix(8)), String(describing: String(format:"%.2f",Double(p.clip.duration)/1000))]),language:nil,trackID:nil,clipID:p.clip.id) } + project.music.map { music in LibraryEntry(title:URL(fileURLWithPath:music.path).lastPathComponent,detail:L("音乐")+" · "+String(format:"%.2f s",Double(music.duration)/1000),language:nil,trackID:nil,musicID:music.id) }
         }
         var entries: [LibraryEntry] = project.videoPath.isEmpty ? [] : [Language.fr, .zh].map { language in
             LibraryEntry(title:language.title+" · "+L("字幕"),detail:L("{0} 条字幕", [String(describing: project.cues.filter{$0.trackID == nil && $0.language == language}.count)]),language:language,trackID:nil)
@@ -137,11 +140,11 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
             do { self.commit(try self.project.replacingClips(clips),name:L("拖动裁剪视频")); self.refresh() } catch { self.showError(error); self.refresh() }
         }
         timeline.editVideo={[weak self] in self?.editSelectedVideo() }
-        let clipEdit=ActionButton(L("视频剪辑 / 特效"),symbol:"scissors",action:{[weak self] in self?.editSelectedVideo()}); clipEdit.identifier=NSUserInterfaceItemIdentifier("clipEdit"); bottom.addSubview(clipEdit)
+        let clipEdit=ActionButton(L("剪辑 / 特效"),symbol:"scissors",action:{[weak self] in self?.editSelectedVideo()}); clipEdit.identifier=NSUserInterfaceItemIdentifier("clipEdit"); bottom.addSubview(clipEdit)
         let cutActions: [(String,String,()->Void)] = [
-            ("splitVideo",L("在播放头分割视频（⌘B）"),{[weak self] in self?.splitSelectedVideo()}),
-            ("trimVideoLeft",L("删除选中视频在播放头左侧的部分"),{[weak self] in self?.trimSelectedVideo(removeBefore:true)}),
-            ("trimVideoRight",L("删除选中视频在播放头右侧的部分"),{[weak self] in self?.trimSelectedVideo(removeBefore:false)})
+            ("splitVideo",L("在播放头分割选中素材（⌘B）"),{[weak self] in self?.splitSelectedVideo()}),
+            ("trimVideoLeft",L("删除选中素材在播放头左侧的部分"),{[weak self] in self?.trimSelectedVideo(removeBefore:true)}),
+            ("trimVideoRight",L("删除选中素材在播放头右侧的部分"),{[weak self] in self?.trimSelectedVideo(removeBefore:false)})
         ]
         for (index,item) in cutActions.enumerated() {
             let button=ActionButton("",action:item.2)
@@ -168,7 +171,8 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         textTrackChoice.setAccessibilityLabel(L("目标文字轨道")); bottom.addSubview(textTrackChoice)
         timelineScroll.hasVerticalScroller=true
         zoom.minValue=5; zoom.maxValue=150; zoom.doubleValue=65; zoom.target=self; zoom.action=#selector(zoomChanged); bottom.addSubview(zoom)
-        timelineScroll.documentView=timeline; timelineScroll.hasHorizontalScroller=true; timelineScroll.drawsBackground=false; bottom.addSubview(timelineScroll)
+        setupMusicControls()
+        timelineScroll.documentView=timeline; timelineScroll.hasHorizontalScroller=true; timelineScroll.hasVerticalScroller=true; timelineScroll.drawsBackground=false; bottom.addSubview(timelineScroll)
         timeline.select={[weak self] in self?.pauseForEditing(); self?.select($0)}; timeline.seek={[weak self] in self?.seek($0)}
         timeline.edit={[weak self] id,start,end in self?.updateCue(id) { c,_ in c.start=start; c.end=end }; self?.refreshInspector() }
         root.addSubview(statusLabel); progress.style = .bar; progress.isIndeterminate=false; progress.minValue=0; progress.maxValue=1; root.addSubview(progress); progress.isHidden=true
@@ -215,9 +219,9 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
                   window.isKeyWindow,window.attachedSheet == nil,NSApp.modalWindow == nil,
                   event.keyCode == 51 || event.keyCode == 117,
                   event.modifierFlags.intersection([.command,.control,.option,.shift]).isEmpty,
-                  !(window.firstResponder is NSText),!self.busy,(self.selected != nil || self.selectedClip != nil || self.overlay.eraseRect != nil) else { return event }
+                  !(window.firstResponder is NSText),!self.busy,(self.selected != nil || self.selectedClip != nil || self.selectedMusic != nil || self.overlay.eraseRect != nil) else { return event }
             // Holding Delete must not remove successive playback-selected clips.
-            if !event.isARepeat { self.pauseForEditing(); if self.overlay.eraseMode,self.overlay.eraseRect != nil { self.applySelectedEraseRegion() } else if self.selectedClip != nil { self.deleteSelectedVideo() } else { self.deleteSubtitle() } }
+            if !event.isARepeat { self.pauseForEditing(); if self.overlay.eraseMode,self.overlay.eraseRect != nil { self.applySelectedEraseRegion() } else if self.selectedMusic != nil { self.deleteMusic() } else if self.selectedClip != nil { self.deleteSelectedVideo() } else { self.deleteSubtitle() } }
             return nil
         }
         playbackKeyMonitor=NSEvent.addLocalMonitorForEvents(matching:.keyDown) { [weak self] event in
@@ -316,10 +320,10 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
             bottom.subviews.first{$0.identifier?.rawValue == name}?.frame=NSRect(x:781+CGFloat(index)*33,y:bottomH-35,width:30,height:28)
         }
         zoom.frame=NSRect(x:bottom.bounds.width-175,y:bottomH-33,width:156,height:24)
-        timelineScroll.frame=NSRect(x:0,y:0,width:bottom.bounds.width,height:bottomH-42); resizeTimeline()
+        timelineScroll.frame=NSRect(x:0,y:0,width:bottom.bounds.width,height:bottomH-78); layoutMusicControls(); resizeTimeline()
         statusLabel.frame=NSRect(x:17,y:6,width:w-330,height:17); progress.frame=NSRect(x:w-310,y:12,width:190,height:6); cancelButton.frame=NSRect(x:w-106,y:1,width:90,height:26)
     }
-    func resizeTimeline() { timeline.frame=NSRect(x:0,y:0,width:max(timelineScroll.contentSize.width,CGFloat(project.duration)/1000*timeline.pointsPerSecond+120),height:max(timelineScroll.contentSize.height,timeline.contentHeight)); timeline.needsDisplay=true }
+    func resizeTimeline() { timeline.frame=NSRect(x:0,y:0,width:max(timelineScroll.contentSize.width,CGFloat(project.timelineExtent)/1000*timeline.pointsPerSecond+120),height:max(timelineScroll.contentSize.height,timeline.contentHeight)); timeline.needsDisplay=true }
     func setupInspector() {
         inspector.orientation = .vertical; inspector.alignment = .leading; inspector.spacing=13; inspector.edgeInsets=NSEdgeInsets(top:0,left:0,bottom:20,right:0)
         inspectorScroll.documentView=inspector; inspectorScroll.hasVerticalScroller=true; inspectorScroll.hasHorizontalScroller=false; inspectorScroll.drawsBackground=false; right.addSubview(inspectorScroll)
@@ -372,7 +376,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         let i=table.selectedRow
         guard libraryEntries.indices.contains(i) else { return }
         let entry=libraryEntries[i]
-        if entry.isMedia { if let id=entry.clipID { selectVideoClip(id) }; return }
+        if entry.isMedia { if let id=entry.musicID { selectMusicClip(id); return }; if let id=entry.clipID { selectVideoClip(id) }; return }
         pauseForEditing()
         if let language=entry.language { preferredLanguage=language }
         if let id=entry.trackID,let item=textTrackChoice.itemArray.first(where:{$0.representedObject as? UUID == id}) { textTrackChoice.select(item) }
@@ -401,6 +405,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         guard !busy else { return }
         view.window?.makeFirstResponder(nil)
         deselectedCueIDs=Set(project.active(at:current).map(\.id))
+        selectedMusic=nil; timeline.selectedMusic=nil
         selectedClip=nil; timeline.selectedClip=nil
         selected=nil; setTableSelection([])
         overlay.selected=nil; overlay.needsDisplay=true; overlay.window?.invalidateCursorRects(for:overlay)
@@ -411,6 +416,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     func select(_ id: UUID, seek shouldSeek: Bool = true) {
         guard let cue=project.cues.first(where:{$0.id == id}) else { return }
         deselectedCueIDs=nil
+        selectedMusic=nil; timeline.selectedMusic=nil
         selectedClip=nil; timeline.selectedClip=nil
         selected=id; preferredLanguage=cue.language
         if let id=cue.trackID,let item=textTrackChoice.itemArray.first(where:{$0.representedObject as? UUID == id}) { textTrackChoice.select(item) }
@@ -430,10 +436,12 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         (left.subviews.first{$0.identifier?.rawValue == "delete"} as? NSButton)?.isEnabled = !busy && selected != nil
     }
     func refresh() {
+        refreshMusicControls()
         fileLabel.stringValue=project.videoPath.isEmpty ? L("尚未导入视频") : URL(fileURLWithPath:project.videoPath).lastPathComponent
         syncingSelection=true; table.reloadData(); syncingSelection=false
         if let selected,project.cues.contains(where:{$0.id == selected}) { syncLibrarySelection() }
         else { selected=nil; setTableSelection([]); refreshInspector() }
+        if showsMedia,let id=selectedMusic,let index=libraryEntries.firstIndex(where:{$0.musicID == id}) { setTableSelection(IndexSet(integer:index)) }
         (center.subviews.first{$0.identifier?.rawValue == "regionErase"} as? NSButton)?.isEnabled = !busy && !project.clips.isEmpty
         refreshRegionEraseButton()
         overlay.editingEnabled = !busy; timeline.editingEnabled = !busy
@@ -457,6 +465,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         (header.subviews.first{$0.identifier?.rawValue == "newProject"} as? NSButton)?.isEnabled = !busy
         generateButton.isEnabled = !busy && !project.videoPath.isEmpty; exportButton.isEnabled=generateButton.isEnabled; importButton.isEnabled = !busy
         scrub.isEnabled = !project.videoPath.isEmpty; scrub.maxValue=max(1,Double(project.duration))
+        (left.subviews.first{$0.identifier?.rawValue == "add"} as? NSButton)?.title = showsMedia ? L("添加素材") : L("添加")
         (left.subviews.first{$0.identifier?.rawValue == "add"} as? NSButton)?.isEnabled = !busy && (showsMedia || !project.videoPath.isEmpty)
         (left.subviews.first{$0.identifier?.rawValue == "delete"} as? NSButton)?.isEnabled = !busy && selected != nil
         refreshPlayback()
@@ -492,7 +501,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         guard next != project else { return }
         do { try next.validate() } catch { showError(error); refreshInspector(); return }
         let old=project
-        if old.clips != next.clips {
+        if old.clips != next.clips || old.music != next.music || old.isVideoMuted != next.isVideoMuted {
             do { try installPreview(for:next) } catch { showError(error); return }
             retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成法中字幕")
         }
@@ -678,7 +687,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         guard !busy else { statusLabel.stringValue=L("请先取消或等待当前任务完成，再新建工程"); return }
         view.window?.makeFirstResponder(nil)
         pauseForEditing()
-        let hasContent = !project.videoPath.isEmpty || !project.clips.isEmpty || !project.cues.isEmpty
+        let hasContent = !project.videoPath.isEmpty || !project.clips.isEmpty || !project.cues.isEmpty || !project.music.isEmpty
         let saved = projectURL.flatMap { try? Project.read($0) }
         if hasContent && saved != project {
             let alert=NSAlert(); alert.messageText=L("保存当前工程后再新建？")
@@ -698,7 +707,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         thumbnailJob?.cancel(); thumbnailJob=nil
         player.pause(); player.replaceCurrentItem(with:nil)
         cancelRegionErase()
-        project=blank; projectURL=nil; selected=nil; selectedClip=nil; current=0
+        project=blank; projectURL=nil; selectedMusic=nil; timeline.selectedMusic=nil; selected=nil; selectedClip=nil; current=0
         deselectedCueIDs=nil; styleDragOriginal=nil; retryDirectory=nil
         UserDefaults.standard.removeObject(forKey:"projectURL")
         UserDefaults.standard.removeObject(forKey:"pendingJob")
@@ -726,13 +735,13 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     }
     func restore() {
         let url=supportDirectory.appendingPathComponent("Recovery.frzh")
-        if let p=try? Project.read(url),!p.videoPath.isEmpty { project=p
+        if let p=try? Project.read(url),!p.videoPath.isEmpty || !p.music.isEmpty { project=p
             if let path=UserDefaults.standard.string(forKey:"projectURL") { projectURL=URL(fileURLWithPath:path) }
             if let path=UserDefaults.standard.string(forKey:"pendingJob"),FileManager.default.fileExists(atPath:path) { retryDirectory=URL(fileURLWithPath:path); generateButton.title=L("继续字幕生成") }
             DispatchQueue.main.async { [weak self] in self?.attachProjectVideo() } }
     }
     func attachProjectVideo() {
-        if project.videoClips != nil { restoreEditedProject(); return }
+        if project.videoClips != nil || !project.music.isEmpty || project.isVideoMuted { restoreEditedProject(); return }
         let url=URL(fileURLWithPath:project.videoPath)
         if FileManager.default.fileExists(atPath:url.path) { loadVideo(url,preservingProject:true) }
         else {

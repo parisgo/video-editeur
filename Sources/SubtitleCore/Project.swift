@@ -1,14 +1,18 @@
 import Foundation
 
 public enum Language: String, Codable, CaseIterable { case fr, zh
-    public var title: String { self == .fr ? "法语" : "中文" }
+    public var title: String { self == .fr ? L("法语") : L("中文") }
 }
 public struct RGBA: Codable, Equatable {
     public var r: Double; public var g: Double; public var b: Double; public var a: Double
     public init(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) { self.r=r; self.g=g; self.b=b; self.a=a }
     public static let white = RGBA(1,1,1), black = RGBA(0,0,0), clear = RGBA(0,0,0,0)
 }
+public enum SubtitleAlignment: String, Codable, CaseIterable { case left, center, right }
 public struct SubtitleStyle: Codable, Equatable {
+    /// Missing in older projects; centered by default.
+    public var alignment: SubtitleAlignment? = nil
+    public var textAlignment: SubtitleAlignment { alignment ?? .center }
     public var font: String = "PingFangSC-Semibold"
     /// Font size in a 1080-pixel-high reference frame.
     public var size: Double = 44
@@ -29,6 +33,8 @@ public struct SubtitleStyle: Codable, Equatable {
     public init() {}
     public static func standard(_ language: Language) -> Self {
         var s = Self()
+        s.font = language == .fr ? "AvenirNextCondensed-Regular" : "ArialMT"
+        s.size = language == .fr ? 60 : 54
         if language == .zh { s.color = .black; s.background = RGBA(1,0.87,0.05); s.outlineWidth = 0; s.y = 0.075 }
         return s
     }
@@ -54,6 +60,7 @@ public struct TextTrack: Codable, Equatable, Identifiable {
     }
 }
 public struct Project: Codable, Equatable {
+    public var videoClips: [VideoClip]?
     public var textTracks: [TextTrack]?
     public var tracks: [TextTrack] { textTracks ?? [] }
     public var version = 1
@@ -93,30 +100,31 @@ public struct Project: Codable, Equatable {
     }
     public func newCue(language: Language, at time: Int64, trackID: UUID? = nil) throws -> Cue {
         let start = max(0, time)
-        guard start < duration else { throw SubtitleError.invalid("播放位置已在视频末尾") }
-        if let id=trackID, !tracks.contains(where:{$0.id == id}) { throw SubtitleError.invalid("文字轨道不存在") }
+        guard start < duration else { throw SubtitleError.invalid(L("播放位置已在视频末尾")) }
+        if let id=trackID, !tracks.contains(where:{$0.id == id}) { throw SubtitleError.invalid(L("文字轨道不存在")) }
         let track = cues.filter { $0.trackID == trackID && (trackID != nil || $0.language == language) }
-        guard !track.contains(where: { $0.start <= start && start < $0.end }) else { throw SubtitleError.invalid("当前位置已有字幕，请移动播放头或调整字幕时间") }
+        guard !track.contains(where: { $0.start <= start && start < $0.end }) else { throw SubtitleError.invalid(L("当前位置已有字幕，请移动播放头或调整字幕时间")) }
         let next = track.filter { $0.start >= start }.map(\.start).min() ?? duration
         let end = min(start + 2000, next, duration)
-        guard end > start else { throw SubtitleError.invalid("当前位置没有可用时间区间") }
+        guard end > start else { throw SubtitleError.invalid(L("当前位置没有可用时间区间")) }
         return Cue(language: language, start: start, end: end, text: trackID != nil ? "添加说明文字" : (language == .zh ? "新的中文字幕" : "Nouveau sous-titre"), trackID:trackID)
     }
     public func validate() throws {
-        guard version == 1 else { throw SubtitleError.invalid("不支持的工程版本：\(version)") }
-        guard duration >= 0, Set(cues.map(\.id)).count == cues.count else { throw SubtitleError.invalid("工程时间或字幕 ID 无效") }
+        try validateClips()
+        guard version == 1 else { throw SubtitleError.invalid(L("不支持的工程版本：{0}", [String(describing: version)])) }
+        guard duration >= 0, Set(cues.map(\.id)).count == cues.count else { throw SubtitleError.invalid(L("工程时间或字幕 ID 无效")) }
         guard Set(tracks.map(\.id)).count == tracks.count,
-              cues.allSatisfy({ c in c.trackID == nil || tracks.contains(where:{$0.id == c.trackID}) }) else { throw SubtitleError.invalid("文字轨道 ID 无效") }
+              cues.allSatisfy({ c in c.trackID == nil || tracks.contains(where:{$0.id == c.trackID}) }) else { throw SubtitleError.invalid(L("文字轨道 ID 无效")) }
         let groups=Language.allCases.map { lang in cues.filter{$0.trackID == nil && $0.language == lang} } + tracks.map { track in cues.filter{$0.trackID == track.id} }
         for group in groups {
             var last: Int64 = 0
             for cue in group.sorted(by: { $0.start < $1.start }) {
                 guard cue.start >= last, cue.end > cue.start, cue.end <= duration, !cue.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                    throw SubtitleError.invalid("字幕时间重叠、越界或内容为空")
+                    throw SubtitleError.invalid(L("字幕时间重叠、越界或内容为空"))
                 }
                 let s = style(for: cue)
-                guard s.size.isFinite, (8...200).contains(s.size), s.x.isFinite, s.y.isFinite, (0...1).contains(s.x), (0...1).contains(s.y), s.outlineWidth.isFinite, (0...10).contains(s.outlineWidth) else { throw SubtitleError.invalid("字幕样式数值无效") }
-                if let width=s.width, !width.isFinite || !(0.1...1).contains(width) { throw SubtitleError.invalid("字幕宽度须在 10% 到 100% 之间") }
+                guard s.size.isFinite, (8...200).contains(s.size), s.x.isFinite, s.y.isFinite, (0...1).contains(s.x), (0...1).contains(s.y), s.outlineWidth.isFinite, (0...10).contains(s.outlineWidth) else { throw SubtitleError.invalid(L("字幕样式数值无效")) }
+                if let width=s.width, !width.isFinite || !(0.1...1).contains(width) { throw SubtitleError.invalid(L("字幕宽度须在 10% 到 100% 之间")) }
                 last = cue.end
             }
         }
@@ -140,7 +148,7 @@ public enum SRT {
     }
     public static func time(_ value: String) throws -> Int64 {
         let p = value.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ".", with: ",").split(whereSeparator: { $0 == ":" || $0 == "," })
-        guard p.count == 4, let h=Int64(p[0]), let m=Int64(p[1]), let s=Int64(p[2]), let ms=Int64(p[3]), h >= 0, (0..<60).contains(m), (0..<60).contains(s), (0..<1000).contains(ms), h < 100000 else { throw SubtitleError.invalid("无效时间：\(value)") }
+        guard p.count == 4, let h=Int64(p[0]), let m=Int64(p[1]), let s=Int64(p[2]), let ms=Int64(p[3]), h >= 0, (0..<60).contains(m), (0..<60).contains(s), (0..<1000).contains(ms), h < 100000 else { throw SubtitleError.invalid(L("无效时间：{0}", [String(describing: value)])) }
         return h*3600000+m*60000+s*1000+ms
     }
     public static func parse(_ source: String, language: Language) throws -> [Cue] {
@@ -148,12 +156,12 @@ public enum SRT {
         var cues: [Cue] = []; var lines: [String] = []
         func flush() throws {
             guard !lines.isEmpty else { return }
-            guard lines.count >= 3, Int(lines[0].trimmingCharacters(in: .whitespaces)) != nil else { throw SubtitleError.invalid("SRT 条目格式错误") }
+            guard lines.count >= 3, Int(lines[0].trimmingCharacters(in: .whitespaces)) != nil else { throw SubtitleError.invalid(L("SRT 条目格式错误")) }
             let times = lines[1].components(separatedBy: "-->")
-            guard times.count == 2 else { throw SubtitleError.invalid("SRT 时间格式错误") }
+            guard times.count == 2 else { throw SubtitleError.invalid(L("SRT 时间格式错误")) }
             let start = try time(times[0]), end = try time(times[1])
             let text = lines.dropFirst(2).joined(separator: language == .zh ? "，" : "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard end > start, start >= (cues.last?.end ?? 0), !text.isEmpty else { throw SubtitleError.invalid("SRT 包含重叠、空文本或无效时段") }
+            guard end > start, start >= (cues.last?.end ?? 0), !text.isEmpty else { throw SubtitleError.invalid(L("SRT 包含重叠、空文本或无效时段")) }
             cues.append(Cue(language: language, start: start, end: end, text: text)); lines=[]
         }
         for line in source.components(separatedBy: "\n") { if line.trimmingCharacters(in: .whitespaces).isEmpty { try flush() } else { lines.append(line) } }
@@ -179,14 +187,14 @@ public enum Translator {
         return compact.isEmpty ? nil : String(String.UnicodeScalarView(compact))
     }
     public static func merge(_ translations: [Translation], source: [Cue]) throws -> [Cue] {
-        guard translations.count == source.count, Set(translations.map(\.id)) == Set(source.map(\.id)), Set(translations.map(\.id)).count == translations.count else { throw SubtitleError.invalid("翻译返回缺失或重复的字幕 ID") }
+        guard translations.count == source.count, Set(translations.map(\.id)) == Set(source.map(\.id)), Set(translations.map(\.id)).count == translations.count else { throw SubtitleError.invalid(L("翻译返回缺失或重复的字幕 ID")) }
         let map = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.text) })
         return try source.map { cue in
             let text = map[cue.id]!.components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: "，").trimmingCharacters(in: .whitespacesAndNewlines)
             let containsChinese = text.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
             let equivalentNonverbal = nonverbalForm(cue.text).map { $0 == nonverbalForm(text) } ?? false
             guard !text.isEmpty, containsChinese || equivalentNonverbal else {
-                throw SubtitleError.invalid("字幕 \(SRT.timestamp(cue.start)) 的翻译为空或未包含中文，请重试该批次")
+                throw SubtitleError.invalid(L("字幕 {0} 的翻译为空或未包含中文，请重试该批次", [String(describing: SRT.timestamp(cue.start))]))
             }
             return Cue(language: .zh, start: cue.start, end: cue.end, text: text)
         }

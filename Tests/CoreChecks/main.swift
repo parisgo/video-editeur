@@ -118,7 +118,8 @@ check("Width drag clamps to video bounds and a minimum width") {
     return VideoGeometry.resizedTextBox(box,delta:-9999,leftEdge:true,videoWidth:1000).minX == 0 && VideoGeometry.resizedTextBox(box,delta:9999,leftEdge:false,videoWidth:1000).maxX == 1000 && VideoGeometry.resizedTextBox(box,delta:9999,leftEdge:true,videoWidth:1000).width == 100
 }
 check("Old style JSON without width still decodes") {
-    let data=try JSONEncoder().encode(SubtitleStyle.standard(.fr))
+    var legacy=SubtitleStyle.standard(.fr); legacy.size=44
+    let data=try JSONEncoder().encode(legacy)
     var object=try JSONSerialization.jsonObject(with:data) as! [String:Any]; object.removeValue(forKey:"width")
     let restored=try JSONDecoder().decode(SubtitleStyle.self,from:JSONSerialization.data(withJSONObject:object))
     return restored.width == nil && restored.size == 44
@@ -127,7 +128,7 @@ check("Width persists and propagates without changing font size") {
     var q=Project(); q.duration=3000; q.cues=[Cue(language:.fr,start:0,end:1000,text:"Bonjour"),Cue(language:.fr,start:1000,end:2000,text:"Merci")]
     var style=q.frenchStyle; style.width=0.97; q.applyStyle(style,to:.fr)
     let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q)); try restored.validate()
-    return restored.cues.allSatisfy{restored.style(for:$0).width == 0.97 && restored.style(for:$0).size == 44}
+    return restored.cues.allSatisfy{restored.style(for:$0).width == 0.97 && restored.style(for:$0).size == style.size}
 }
 check("Invalid persisted subtitle width is rejected") {
     var q=Project(); q.duration=1000; q.cues=[Cue(language:.fr,start:0,end:1000,text:"Bonjour")]; q.frenchStyle.width=1.1
@@ -185,6 +186,108 @@ check("Readability preference persists and can be disabled") {
     var style=SubtitleStyle.standard(.fr); style.readability=false
     let loaded=try JSONDecoder().decode(SubtitleStyle.self,from:JSONEncoder().encode(style))
     return !loaded.enhancesReadability && loaded == style
+}
+
+check("Legacy video becomes one non-destructive clip") {
+    var p=Project(); p.videoPath="/video.mp4"; p.duration=4000
+    return p.clips.count == 1 && p.clips[0].duration == 4000 && p.placements[0].start == 0
+}
+check("Append, trim and reorder carry captions with source") {
+    var p=Project(); p.videoPath="/a.mp4"; p.duration=4000
+    p.cues=[Cue(language:.zh,start:1500,end:2500,text:"原字幕")]
+    var a=p.clips[0]; a.sourceStart=1000
+    let b=VideoClip(path:"/b.mp4",duration:3000)
+    let trimmed=try p.replacingClips([a,b])
+    let reordered=try trimmed.replacingClips([b,a])
+    return trimmed.duration == 6000 && trimmed.cues[0].start == 500 && reordered.cues[0].start == 3500
+}
+check("Split preserves source boundaries and splits crossing caption IDs") {
+    var p=Project(); p.videoPath="/a.mp4"; p.duration=4000
+    p.cues=[Cue(language:.fr,start:1000,end:3000,text:"Bonjour")]
+    let q=try p.splittingClip(p.clips[0].id,at:2000)
+    return q.duration == 4000 && q.clips.count == 2 && q.clips[1].sourceStart == 2000 && q.cues.count == 2 && Set(q.cues.map(\.id)).count == 2 && q.cues.map{$0.end-$0.start}.reduce(0,+) == 2000
+}
+check("Dissolve shortens timeline without overlapping captions") {
+    var p=Project(); p.videoPath="/a.mp4"; p.duration=4000
+    let a=p.clips[0]; var b=VideoClip(path:"/b.mp4",duration:4000)
+    p=try p.replacingClips([a,b]); p.cues=[Cue(language:.zh,start:0,end:4000,text:"一"),Cue(language:.zh,start:4000,end:8000,text:"二")]
+    b.transition=1000; let q=try p.replacingClips([a,b]); try q.validate()
+    return q.duration == 7000 && q.cues[0].end == 3500 && q.cues[1].start == 3500
+}
+check("Clip edits reject invalid source bounds and excessive transitions") {
+    var p=Project(); var c=VideoClip(path:"a.mp4",duration:4000); c.sourceEnd=5000
+    let bounds=rejects{_ = try p.replacingClips([c])}
+    c.sourceEnd=4000; c.transition=1000
+    let first=rejects{_ = try p.replacingClips([c])}
+    c.transition=0; c.effects.contrast = .nan
+    return bounds && first && rejects{_ = try p.replacingClips([c])}
+}
+check("Clip effects and source trims persist; old JSON remains readable") {
+    var p=Project(); var c=VideoClip(path:"含 空格.mp4",duration:4000); c.sourceStart=1000; c.effects.saturation=0.5
+    p=try p.replacingClips([c]); let q=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(p)); try q.validate()
+    return q == p && q.clips[0].sourceStart == 1000
+}
+check("Removing a clip removes its captions and ripples remaining material") {
+    var p=Project(); p.videoPath="a.mp4"; p.duration=2000; let a=p.clips[0],b=VideoClip(path:"b.mp4",duration:2000)
+    p=try p.replacingClips([a,b]); p.cues=[Cue(language:.zh,start:500,end:1000,text:"一"),Cue(language:.zh,start:2500,end:3000,text:"二")]
+    let q=try p.replacingClips([b]); return q.duration == 2000 && q.cues.count == 1 && q.cues[0].text == "二" && q.cues[0].start == 500
+}
+check("Trim-left button maps source in-point and carries captions") {
+    var p=Project(); p.videoPath="a.mp4"; p.duration=4000
+    p.cues=[Cue(language:.zh,start:1000,end:3000,text:"中间")]
+    let q=try p.trimmingClip(p.clips[0].id,at:2000,removeBefore:true)
+    return q.duration == 2000 && q.clips[0].sourceStart == 2000 && q.cues[0].start == 0 && q.cues[0].end == 1000
+}
+check("Trim-right button clips captions and ripples following video") {
+    var p=Project(); p.videoPath="a.mp4"; p.duration=4000
+    let a=p.clips[0],b=VideoClip(path:"b.mp4",duration:2000)
+    p=try p.replacingClips([a,b]); p.cues=[Cue(language:.fr,start:1000,end:3000,text:"Un"),Cue(language:.fr,start:4500,end:5000,text:"Deux")]
+    let q=try p.trimmingClip(a.id,at:2000,removeBefore:false)
+    return q.duration == 4000 && q.cues[0].end == 2000 && q.cues[1].start == 2500 && q.placements[1].start == 2000
+}
+check("Trim buttons reject boundaries and wrong clip IDs") {
+    var p=Project(); p.videoPath="a.mp4"; p.duration=4000
+    return rejects{_ = try p.trimmingClip(p.clips[0].id,at:0,removeBefore:true)} && rejects{_ = try p.trimmingClip(p.clips[0].id,at:4000,removeBefore:false)} && rejects{_ = try p.trimmingClip(UUID(),at:1000,removeBefore:true)}
+}
+check("Erase regions persist and survive source-based split") {
+    var p=Project(); var clip=VideoClip(path:"a.mp4",duration:4000)
+    let region=VideoEraseRegion(x:0.1,y:0.1,width:0.7,height:0.2,sourceStart:500,sourceEnd:3500)
+    clip.eraseRegions=[region]; p=try p.replacingClips([clip])
+    let split=try p.splittingClip(clip.id,at:2000)
+    let decoded=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(split)); try decoded.validate()
+    return decoded.clips.count == 2 && decoded.clips.allSatisfy{$0.eraseRegions == [region]}
+}
+check("Erase regions reject invalid rectangles, colors and times") {
+    var p=Project(); var clip=VideoClip(path:"a.mp4",duration:4000)
+    clip.eraseRegions=[VideoEraseRegion(x:0.9,y:0,width:0.2,height:0.2,sourceStart:0,sourceEnd:4000)]
+    let outside=rejects{_ = try p.replacingClips([clip])}
+    clip.eraseRegions=[VideoEraseRegion(x:0,y:0,width:0.2,height:0.2,sourceStart:4000,sourceEnd:4000)]
+    let emptyTime=rejects{_ = try p.replacingClips([clip])}
+    clip.eraseRegions=[VideoEraseRegion(x:0,y:0,width:0.2,height:0.2,sourceStart:0,sourceEnd:4000,color:RGBA(.nan,0,0))]
+    return outside && emptyTime && rejects{_ = try p.replacingClips([clip])}
+}
+check("Legacy styles default to centered alignment") {
+    let data=try JSONEncoder().encode(SubtitleStyle())
+    var json=try JSONSerialization.jsonObject(with:data) as! [String:Any]
+    json.removeValue(forKey:"alignment")
+    return try JSONDecoder().decode(SubtitleStyle.self,from:JSONSerialization.data(withJSONObject:json)).textAlignment == .center
+}
+check("Alignment survives project persistence and applies only to selected track") {
+    var q=p; var style=SubtitleStyle(); style.alignment = .right
+    q.applyStyle(style,for:q.cues[0])
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
+    return restored.cues.allSatisfy { restored.style(for:$0).textAlignment == .right } && restored.style(for:Cue(language:.zh,start:0,end:1000,text:"测试")).textAlignment == .center
+}
+check("UI localization renders both languages without altering arguments") {
+    let payload="字幕 {1} / 中文.mp4"
+    return UILocalization.text("导出完成：{0}",arguments:[payload],language:.en) == "Export complete: \(payload)"
+        && UILocalization.text("导出完成：{0}",arguments:[payload],language:.zh) == "导出完成：\(payload)"
+        && UILocalization.text("unknown",language:.en) == "unknown"
+}
+check("Every English translation preserves placeholder indices") {
+    let regex=try NSRegularExpression(pattern:"\\{[0-9]+\\}")
+    func tokens(_ s:String)->Set<String> { let ns=s as NSString; return Set(regex.matches(in:s,range:NSRange(location:0,length:ns.length)).map{ns.substring(with:$0.range)}) }
+    return UILocalization.english.allSatisfy { tokens($0.key) == tokens($0.value) && !$0.value.isEmpty }
 }
 print("\(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0:1)

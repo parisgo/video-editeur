@@ -39,7 +39,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     let progress=NSProgressIndicator(), scrub=NSSlider(), zoom=NSSlider()
     var importButton: ActionButton!, generateButton: ActionButton!, exportButton: ActionButton!, cancelButton: ActionButton!, playButton: ActionButton!
     let displayMode=NSSegmentedControl(labels:["法语","中文"],trackingMode:.selectAny,target:nil,action:nil)
-    let languageChoice=NSSegmentedControl(labels:["法语","中文"],trackingMode:.selectAny,target:nil,action:nil)
+    let languageChoice=NSSegmentedControl(labels:["素材","字幕"],trackingMode:.selectOne,target:nil,action:nil)
     let panelToggles=NSSegmentedControl(labels:["素材", "字幕属性", "时间轴"],trackingMode:.selectAny,target:nil,action:nil)
     private let panelKeys=["editor.showMedia", "editor.showInspector", "editor.showTimeline"]
     let inspectorScroll=NSScrollView(), inspector=NSStackView()
@@ -49,7 +49,35 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     let selectionLabel=label("选择字幕开始编辑",size:13,bold:true)
     var inspectorUpdating=false
     var inspectorPositioned=false
-    var rows: [Cue] { project.displayedCues }
+    struct LibraryEntry {
+        let title: String
+        let detail: String
+        let language: Language?
+        let trackID: UUID?
+        var isMedia: Bool { language == nil && trackID == nil }
+        func contains(_ cue: Cue) -> Bool {
+            !isMedia && (trackID != nil ? cue.trackID == trackID : cue.trackID == nil && cue.language == language)
+        }
+    }
+    var showsMedia: Bool { languageChoice.selectedSegment == 0 }
+    var libraryEntries: [LibraryEntry] {
+        if showsMedia {
+            return project.videoPath.isEmpty ? [] : [LibraryEntry(title:URL(fileURLWithPath:project.videoPath).lastPathComponent,detail:"视频素材 · \(SRT.timestamp(project.duration).prefix(8))",language:nil,trackID:nil)]
+        }
+        var entries: [LibraryEntry] = project.videoPath.isEmpty ? [] : [Language.fr, .zh].map { language in
+            LibraryEntry(title:language.title+"字幕",detail:"\(project.cues.filter{$0.trackID == nil && $0.language == language}.count) 条字幕",language:language,trackID:nil)
+        }
+        entries += project.tracks.map { track in
+            LibraryEntry(title:track.name,detail:"\(project.cues.filter{$0.trackID == track.id}.count) 条文字",language:nil,trackID:track.id)
+        }
+        return entries
+    }
+    func syncLibrarySelection() {
+        guard !showsMedia else { return }
+        let cue=project.cues.first{$0.id == selected}
+        let index=cue.flatMap { cue in libraryEntries.firstIndex{$0.contains(cue)} }
+        setTableSelection(index.map{IndexSet(integer:$0)} ?? [])
+    }
     var syncingSelection=false
     var preferredLanguage: Language = .zh
     var styleDragOriginal: Project?
@@ -76,9 +104,9 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         left.addSubview(fileLabel)
         table.headerView=nil; table.backgroundColor = .clear; table.rowHeight=61; table.intercellSpacing=NSSize(width:0,height:3)
         let column=NSTableColumn(identifier:NSUserInterfaceItemIdentifier("subtitle")); column.width=240; table.addTableColumn(column); table.delegate=self; table.dataSource=self
-        table.allowsMultipleSelection=true; table.selectionHighlightStyle = .regular; tableScroll.documentView=table; tableScroll.hasVerticalScroller=true; tableScroll.drawsBackground=false; left.addSubview(tableScroll)
-        languageChoice.target=self; languageChoice.action=#selector(modeChanged(_:)); left.addSubview(languageChoice)
-        let add=ActionButton("添加",symbol:"plus",action:{[weak self] in self?.addSubtitle()}); add.identifier=NSUserInterfaceItemIdentifier("add"); left.addSubview(add)
+        table.allowsMultipleSelection=false; table.selectionHighlightStyle = .regular; tableScroll.documentView=table; tableScroll.hasVerticalScroller=true; tableScroll.drawsBackground=false; left.addSubview(tableScroll)
+        languageChoice.selectedSegment=0; languageChoice.setAccessibilityLabel("素材与字幕分类"); languageChoice.target=self; languageChoice.action=#selector(libraryChanged(_:)); left.addSubview(languageChoice)
+        let add=ActionButton("添加",symbol:"plus",action:{[weak self] in self?.addLibraryItem()}); add.identifier=NSUserInterfaceItemIdentifier("add"); left.addSubview(add)
         let delete=ActionButton("",symbol:"trash",action:{[weak self] in self?.deleteSubtitle()}); delete.identifier=NSUserInterfaceItemIdentifier("delete"); left.addSubview(delete)
         center.drop={[weak self] in self?.loadVideo($0)}
         preview.player=player; preview.allowsVideoFrameAnalysis=false; preview.controlsStyle = .none; preview.videoGravity = .resizeAspect; center.addSubview(preview); center.addSubview(overlay)
@@ -275,17 +303,44 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         inspector.translatesAutoresizingMaskIntoConstraints=true
         inspector.frame=NSRect(x:0,y:0,width:250,height:inspector.fittingSize.height)
     }
-    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    func numberOfRows(in tableView: NSTableView) -> Int { libraryEntries.count }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let cue=rows[row],cell=NSTableCellView(); cell.frame.size.width=tableColumn?.width ?? 240; let badge=label(cue.trackID != nil ? "文" : cue.language == .fr ? "FR" : "中",size:10,color:cue.language == .fr ? NSColor.systemPurple : accent,bold:true)
-        badge.frame=NSRect(x:8,y:37,width:27,height:16); cell.addSubview(badge)
-        let t=label(String(format:"%.2f — %.2f",Double(cue.start)/1000,Double(cue.end)/1000),size:10,color:muted); t.frame=NSRect(x:39,y:37,width:max(1,cell.frame.width-47),height:16); t.autoresizingMask=[.width]; cell.addSubview(t)
-        let body=label(cue.text.replacingOccurrences(of:"\n",with:" "),size:12); body.lineBreakMode = .byTruncatingTail; body.frame=NSRect(x:8,y:8,width:max(1,cell.frame.width-16),height:22); body.autoresizingMask=[.width]; cell.addSubview(body); return cell
+        let entry=libraryEntries[row],cell=NSTableCellView()
+        cell.frame.size.width=tableColumn?.width ?? 240
+        let title=label(entry.title,size:13,bold:true)
+        title.frame=NSRect(x:8,y:32,width:max(1,cell.frame.width-16),height:22)
+        title.lineBreakMode = .byTruncatingTail; title.autoresizingMask=[.width]; cell.addSubview(title)
+        let detail=label(entry.detail,size:11,color:muted)
+        detail.frame=NSRect(x:8,y:8,width:max(1,cell.frame.width-16),height:20)
+        detail.autoresizingMask=[.width]; cell.addSubview(detail)
+        return cell
     }
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard !syncingSelection else { return }
         let i=table.selectedRow
-        if i >= 0,i < rows.count { select(rows[i].id) }
+        guard libraryEntries.indices.contains(i) else { return }
+        let entry=libraryEntries[i]
+        if entry.isMedia { return }
+        pauseForEditing()
+        if let language=entry.language { preferredLanguage=language }
+        if let id=entry.trackID,let item=textTrackChoice.itemArray.first(where:{$0.representedObject as? UUID == id}) { textTrackChoice.select(item) }
+        let cues=project.cues.filter{entry.contains($0)}.sorted{$0.start < $1.start}
+        if let cue=cues.first(where:{$0.start <= current && current < $0.end}) ?? cues.first {
+            select(cue.id)
+        } else {
+            selected=nil; overlay.selected=nil; timeline.selected=nil
+            overlay.needsDisplay=true; timeline.needsDisplay=true; refreshInspector()
+        }
+    }
+    @objc func libraryChanged(_ sender: NSSegmentedControl) {
+        view.window?.makeFirstResponder(nil)
+        setTableSelection([])
+        refresh()
+    }
+    func addLibraryItem() {
+        if showsMedia { importVideo() }
+        else if let entry=libraryEntries.indices.contains(table.selectedRow) ? libraryEntries[table.selectedRow] : nil,entry.trackID != nil { addTrackText() }
+        else { addSubtitle() }
     }
     func setTableSelection(_ indexes: IndexSet) {
         syncingSelection=true; table.selectRowIndexes(indexes,byExtendingSelection:false); syncingSelection=false
@@ -301,37 +356,32 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         (left.subviews.first{$0.identifier?.rawValue == "delete"} as? NSButton)?.isEnabled=false
     }
     func select(_ id: UUID, seek shouldSeek: Bool = true) {
-        guard let cue=rows.first(where:{$0.id == id}) else { return }
+        guard let cue=project.cues.first(where:{$0.id == id}) else { return }
         deselectedCueIDs=nil
         selected=id; preferredLanguage=cue.language
         if let id=cue.trackID,let item=textTrackChoice.itemArray.first(where:{$0.representedObject as? UUID == id}) { textTrackChoice.select(item) }
-        if let i=rows.firstIndex(where:{$0.id == id}) { setTableSelection(IndexSet(integer:i)) }
+        syncLibrarySelection()
         if shouldSeek { seek(cue.start) }
-        overlay.selected=selected; overlay.needsDisplay=true; timeline.selected=selected; timeline.needsDisplay=true; refreshInspector()
+        overlay.selected=player.rate == 0 ? selected : nil; overlay.needsDisplay=true; timeline.selected=selected; timeline.needsDisplay=true; refreshInspector()
     }
     func followCurrentSubtitles() {
-        let displayed=rows, active=project.active(at:current), ids=Set(active.map(\.id))
+        let active=project.active(at:current), ids=Set(active.map(\.id))
         if let dismissed=deselectedCueIDs {
             if dismissed == ids { return }
             deselectedCueIDs=nil
         }
-        let indexes=IndexSet(displayed.indices.filter{ids.contains(displayed[$0].id)})
         let next=active.first(where:{$0.id == selected})?.id ?? active.first(where:{$0.trackID == nil && $0.language == preferredLanguage})?.id ?? active.first?.id
-        if table.selectedRowIndexes != indexes {
-            setTableSelection(indexes)
-            if let first=indexes.first { table.scrollRowToVisible(first) }
-            if let last=indexes.last { table.scrollRowToVisible(last) }
-        }
-        if selected != next { selected=next; overlay.selected=next; timeline.selected=next; refreshInspector() }
+        if selected != next { selected=next; overlay.selected=player.rate == 0 ? next : nil; timeline.selected=next; refreshInspector() }
+        syncLibrarySelection()
         (left.subviews.first{$0.identifier?.rawValue == "delete"} as? NSButton)?.isEnabled = !busy && selected != nil
     }
     func refresh() {
         fileLabel.stringValue=project.videoPath.isEmpty ? "尚未导入视频" : URL(fileURLWithPath:project.videoPath).lastPathComponent
         syncingSelection=true; table.reloadData(); syncingSelection=false
-        if let selected,let i=rows.firstIndex(where:{$0.id == selected}) { setTableSelection(IndexSet(integer:i)) }
+        if let selected,project.cues.contains(where:{$0.id == selected}) { syncLibrarySelection() }
         else { selected=nil; setTableSelection([]); refreshInspector() }
         overlay.editingEnabled = !busy; timeline.editingEnabled = !busy
-        overlay.project=project; overlay.selected=selected; overlay.time=current; overlay.needsDisplay=true
+        overlay.project=project; overlay.selected=player.rate == 0 ? selected : nil; overlay.time=current; overlay.needsDisplay=true
         let chosen=textTrackChoice.selectedItem?.representedObject as? UUID
         textTrackChoice.removeAllItems()
         for track in project.tracks {
@@ -343,18 +393,25 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         for v in bottom.subviews where ["newTrack","newText"].contains(v.identifier?.rawValue ?? "") { (v as? NSButton)?.isEnabled = !busy && project.duration > 0 }
         timeline.project=project; timeline.selected=selected; timeline.current=current; resizeTimeline()
         emptyTitle.isHidden = !project.videoPath.isEmpty; emptyHint.isHidden=emptyTitle.isHidden
-        for control in [languageChoice,displayMode] {
+        for control in [displayMode] {
             control.setSelected(project.showFrench,forSegment:0); control.setSelected(project.showChinese,forSegment:1); control.isEnabled = !busy
         }
+        languageChoice.isEnabled = !busy
+        (left.subviews.first{$0.identifier?.rawValue == "delete"})?.isHidden=showsMedia
         generateButton.isEnabled = !busy && !project.videoPath.isEmpty; exportButton.isEnabled=generateButton.isEnabled; importButton.isEnabled = !busy
         scrub.isEnabled = !project.videoPath.isEmpty; scrub.maxValue=max(1,Double(project.duration))
-        (left.subviews.first{$0.identifier?.rawValue == "add"} as? NSButton)?.isEnabled = !busy && !project.videoPath.isEmpty
+        (left.subviews.first{$0.identifier?.rawValue == "add"} as? NSButton)?.isEnabled = !busy && (showsMedia || !project.videoPath.isEmpty)
         (left.subviews.first{$0.identifier?.rawValue == "delete"} as? NSButton)?.isEnabled = !busy && selected != nil
         refreshPlayback()
     }
     func refreshPlayback() {
         timeLabel.stringValue="\(SRT.timestamp(current).replacingOccurrences(of:",",with:".")) / \(SRT.timestamp(project.duration).prefix(8))"
         if player.rate != 0 { followCurrentSubtitles() }
+        let previewSelection=player.rate == 0 ? selected : nil
+        if overlay.selected != previewSelection {
+            overlay.selected=previewSelection
+            overlay.window?.invalidateCursorRects(for:overlay)
+        }
         scrub.doubleValue=Double(current); overlay.time=current; overlay.needsDisplay=true; timeline.current=current; timeline.needsDisplay=true
     }
     func refreshInspector() {
@@ -386,7 +443,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         var next=project; edit(&next.cues[i],project); commit(next)
     }
     func pauseForEditing() {
-        if player.rate != 0 { player.pause(); playButton.image=NSImage(systemSymbolName:"play.fill",accessibilityDescription:"播放") }
+        if player.rate != 0 { player.pause(); playButton.image=NSImage(systemSymbolName:"play.fill",accessibilityDescription:"播放"); refreshPlayback() }
     }
     func textDidBeginEditing(_ notification: Notification) { pauseForEditing() }
     func controlTextDidBeginEditing(_ notification: Notification) { pauseForEditing() }
@@ -499,6 +556,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         guard !project.videoPath.isEmpty else { return }
         if player.rate == 0 { if current >= project.duration-40 { seek(0) }; player.play(); playButton.image=NSImage(systemSymbolName:"pause.fill",accessibilityDescription:"暂停") }
         else { player.pause(); playButton.image=NSImage(systemSymbolName:"play.fill",accessibilityDescription:"播放") }
+        refreshPlayback()
     }
     func showError(_ error: Error) { let alert=NSAlert(error:error); alert.runModal() }
     @objc func importVideo() {

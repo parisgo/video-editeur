@@ -5,6 +5,7 @@
 <key>CFBundleDisplayName</key><string>字幕工坊</string>
 <key>CFBundleIdentifier</key><string>local.videoediteur.studio</string>
 <key>CFBundleExecutable</key><string>VideoEditeur</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>CFBundleVersion</key><string>1</string>

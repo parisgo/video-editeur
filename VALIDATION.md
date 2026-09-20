@@ -233,3 +233,7 @@ Release 构建通过，65/65 核心检查通过；包含译文占位符一致性
 ## 保留完整音乐时长（2026-09-18）
 
 修复导入音乐时按视频剩余长度裁短源范围的问题。时间轴长度和音乐片段显示使用完整音频范围，可横向滚动查看；右侧裁剪边缘可恢复到源音频结尾。预览和导出仍以视频时长为限。已有工程的裁剪范围保持不变，重新导入可获取完整范围。Release 构建及 71/71 检查通过，新增 41 秒视频搭配 120 秒音乐的范围、持久化及视频时长隔离检查；桌面应用已更新。
+
+## 应用图标（2026-09-20）
+
+打包脚本从 Assets/Brand/video-editeur-logo-v1.png 生成标准 16–1024 像素 iconset，经 iconutil 生成 AppIcon.icns，并设置 CFBundleIconFile。受限环境的 iconutil 返回 Invalid Iconset；在正常 macOS 权限环境重新打包成功。Release 构建、Info.plist 图标引用及 codesign --verify --deep --strict 检查通过，桌面应用已更新。未强制重启正在运行的应用；运行中 Dock 图标可能需退出重开刷新。

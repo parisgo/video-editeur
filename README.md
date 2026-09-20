@@ -18,6 +18,8 @@ open dist/VideoEditeur.app
 
 此版本用于当前 Mac 自用，采用本地 ad-hoc 签名，无 App Sandbox、不含公证和商店分发配置。工具依赖不会打进安装包。
 
+应用图标源图位于 `Assets/Brand/video-editeur-logo-v1.png`。打包脚本使用系统 `sips` 和 `iconutil` 自动生成各尺寸图标并写入应用包，无需手动修改 `dist`。
+
 ## 使用
 
 1. **导入视频**或将 MP4/MOV 拖入中间预览区。这会开始新工程；向当前工程追加视频或音乐请用素材页的 **添加素材**（支持多选）或菜单「视频剪辑 → 添加素材…」（⌘I）。

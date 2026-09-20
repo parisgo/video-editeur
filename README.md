@@ -2,6 +2,8 @@
 
 Swift + AppKit 原生 macOS 多视频剪辑与法中字幕编辑器。深色三栏工作区，AVPlayer 预览，双语字幕时间轴，原生 H.264/AAC 与 HEVC 10-bit 烧录导出。
 
+![字幕工坊应用界面](Assets/Photo/pic_1.png)
+
 ## 启动
 
 已构建应用：`dist/VideoEditeur.app`，双击即可启动，或：

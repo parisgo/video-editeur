@@ -38,11 +38,11 @@ struct MediaProbe {
         dolbyVision=atoms?["dvcC"] != nil || atoms?["dvvC"] != nil || codec == 0x64766831 || codec == 0x64766865
     }
     static func formats(_ project: Project) throws -> ([VideoColor],String) {
-        let probes=try project.clips.map{try MediaProbe($0.path)}
+        let probes=try project.allClips.map{try MediaProbe($0.path)}
         let colors=Set(probes.map{$0.color.rawValue})
         var formats: [VideoColor]=[.sdr]
         if colors.count == 1,let color=probes.first?.color,color != .sdr { formats.append(color) }
-        let detail=zip(project.clips,probes).map{URL(fileURLWithPath:$0.0.path).lastPathComponent+"："+$0.1.description}.joined(separator:"\n")
+        let detail=zip(project.allClips,probes).map{URL(fileURLWithPath:$0.0.path).lastPathComponent+"："+$0.1.description}.joined(separator:"\n")
         let policy=colors.count>1 ? L("\n混合色彩格式：本版仅提供 SDR 输出，避免误标 HDR。") : ""
         let dv=probes.contains{$0.dolbyVision} ? L("\nDolby Vision 动态元数据不会保留，只可处理兼容基础层。") : ""
         return (formats,detail+policy+dv+L("\nHDR 为重新编码，非逐位无损；显示效果还取决于屏幕。"))
@@ -64,9 +64,10 @@ final class EditInstruction: NSObject, AVVideoCompositionInstructionProtocol {
     let project: Project
     let color: VideoColor
     let subtitles: Bool
-    init(start: Int64,end: Int64,layers: [RenderLayer],project: Project,color: VideoColor,subtitles: Bool) {
-        timeRange=CMTimeRange(start:CMTime(value:start,timescale:1000),duration:CMTime(value:end-start,timescale:1000))
-        self.layers=layers; self.project=project; self.color=color; self.subtitles=subtitles
+    let speed: Double
+    init(start: Int64,end: Int64,layers: [RenderLayer],project: Project,color: VideoColor,subtitles: Bool,speed: Double=1) {
+        timeRange=CMTimeRange(start:CMTimeMultiplyByFloat64(CMTime(value:start,timescale:1000),multiplier:1/speed),end:CMTimeMultiplyByFloat64(CMTime(value:end,timescale:1000),multiplier:1/speed))
+        self.speed=speed; self.layers=layers; self.project=project; self.color=color; self.subtitles=subtitles
         requiredSourceTrackIDs=layers.map{NSNumber(value:$0.trackID)}
     }
 }
@@ -75,14 +76,16 @@ struct EditedAsset {
     let video: AVMutableVideoComposition
     let audio: AVMutableAudioMix
     let size: CGSize
-    init(project: Project,color: VideoColor,subtitles: Bool) throws {
+    init(project: Project,color: VideoColor,subtitles: Bool,applySpeed: Bool=false) throws {
         try project.validate()
-        guard let first=project.clips.first else { throw SubtitleError.invalid(L("请先添加视频")) }
+        let speed=applySpeed ? project.speed : 1
+        func outputTime(_ ms: Int64) -> CMTime { CMTimeMultiplyByFloat64(CMTime(value:ms,timescale:1000),multiplier:1/speed) }
+        guard let first=project.allClips.first else { throw SubtitleError.invalid(L("请先添加视频")) }
         let probe=try MediaProbe(first.path)
         size=CGSize(width:max(2,ceil(probe.size.width/2)*2),height:max(2,ceil(probe.size.height/2)*2))
         asset=AVMutableComposition(); video=AVMutableVideoComposition(); audio=AVMutableAudioMix()
         var layers: [RenderLayer]=[],parameters: [AVAudioMixInputParameters]=[]
-        let places=project.placements
+        let places=project.renderPlacements
         var frameDuration=CMTime(value:1,timescale:30)
         for (i,p) in places.enumerated() {
             let source=AVURLAsset(url:URL(fileURLWithPath:p.clip.path))
@@ -104,17 +107,19 @@ struct EditedAsset {
             try holdFrame(sourceStart:range.start,at:destination,duration:leading)
             try target.insertTimeRange(range,of:v,at:CMTimeAdd(destination,leading))
             try holdFrame(sourceStart:CMTimeSubtract(CMTimeRangeGetEnd(range),sampleDuration),at:CMTimeAdd(CMTimeAdd(destination,leading),range.duration),duration:trailing)
-            let outgoing=i+1<places.count ? places[i+1].clip.transition : 0
+            let isLayer=project.layers.contains{$0.id == p.clip.id}
+            let outgoing = !isLayer && i+1<project.placements.count ? places[i+1].clip.transition : 0
             layers.append(RenderLayer(trackID:target.trackID,transform:v.preferredTransform,placement:p,outgoing:outgoing))
-            if !project.isVideoMuted,let a=source.tracks(withMediaType:.audio).first,let at=asset.addMutableTrack(withMediaType:.audio,preferredTrackID:kCMPersistentTrackID_Invalid) {
+            if (isLayer ? !(project.layers.first{$0.id == p.clip.id}?.muted ?? false) : !project.isVideoMuted),let a=source.tracks(withMediaType:.audio).first,let at=asset.addMutableTrack(withMediaType:.audio,preferredTrackID:kCMPersistentTrackID_Invalid) {
                 let r=CMTimeRangeGetIntersection(sourceRange,otherRange:a.timeRange)
                 if CMTimeGetSeconds(r.duration)>0 {
                     try at.insertTimeRange(r,of:a,at:CMTimeAdd(CMTime(value:p.start,timescale:1000),CMTimeSubtract(r.start,sourceRange.start)))
                     let param=AVMutableAudioMixInputParameters(track:at)
                     let fadeIn=max(p.clip.transition,p.clip.effects.fadeIn),fadeOut=max(outgoing,p.clip.effects.fadeOut)
-                    param.setVolume(1,at:CMTime(value:p.start,timescale:1000))
-                    if fadeIn>0 { param.setVolumeRamp(fromStartVolume:0,toEndVolume:1,timeRange:CMTimeRange(start:CMTime(value:p.start,timescale:1000),duration:CMTime(value:fadeIn,timescale:1000))) }
-                    if fadeOut>0 { param.setVolumeRamp(fromStartVolume:1,toEndVolume:0,timeRange:CMTimeRange(start:CMTime(value:p.end-fadeOut,timescale:1000),duration:CMTime(value:fadeOut,timescale:1000))) }
+                    param.audioTimePitchAlgorithm = .spectral
+                    param.setVolume(1,at:outputTime(p.start))
+                    if fadeIn>0 { param.setVolumeRamp(fromStartVolume:0,toEndVolume:1,timeRange:CMTimeRange(start:outputTime(p.start),duration:outputTime(fadeIn))) }
+                    if fadeOut>0 { param.setVolumeRamp(fromStartVolume:1,toEndVolume:0,timeRange:CMTimeRange(start:outputTime(p.end-fadeOut),duration:outputTime(fadeOut))) }
                     parameters.append(param)
                 }
             }
@@ -127,15 +132,18 @@ struct EditedAsset {
             guard range.isValid,CMTimeGetSeconds(range.duration)>0 else { throw SubtitleError.invalid(L("背景音乐没有可用音频")) }
             let start=CMTimeAdd(CMTime(value:music.start,timescale:1000),CMTimeSubtract(range.start,requested.start))
             try target.insertTimeRange(range,of:track,at:start)
-            let parameter=AVMutableAudioMixInputParameters(track:target); parameter.setVolume(Float(music.volume),at:start); parameters.append(parameter)
+            let parameter=AVMutableAudioMixInputParameters(track:target); parameter.audioTimePitchAlgorithm = .spectral; parameter.setVolume(Float(music.volume),at:CMTimeMultiplyByFloat64(start,multiplier:1/speed)); parameters.append(parameter)
+        }
+        if speed != 1 {
+            asset.scaleTimeRange(CMTimeRange(start:.zero,duration:CMTime(value:project.duration,timescale:1000)),toDuration:outputTime(project.duration))
         }
         audio.inputParameters=parameters
         video.customVideoCompositorClass=EditCompositor.self
         video.renderSize=size; video.frameDuration=frameDuration
         video.colorPrimaries=color.primaries; video.colorTransferFunction=color.transfer; video.colorYCbCrMatrix=color.matrix
-        let boundaries=Set(places.flatMap{[$0.start,$0.end]}).sorted()
+        let boundaries=Set(places.flatMap{[$0.start,$0.end]}+[0,project.duration]).sorted()
         video.instructions=zip(boundaries,boundaries.dropFirst()).map { a,b in
-            EditInstruction(start:a,end:b,layers:layers.filter{$0.placement.start<=a && $0.placement.end>a},project:project,color:color,subtitles:subtitles)
+            EditInstruction(start:a,end:b,layers:layers.filter{$0.placement.start<=a && $0.placement.end>a},project:project,color:color,subtitles:subtitles,speed:speed)
         }
     }
     func playerItem() -> AVPlayerItem {
@@ -155,9 +163,11 @@ final class EditCompositor: NSObject, AVVideoCompositing {
         queue.async { autoreleasepool {
             guard let instruction=request.videoCompositionInstruction as? EditInstruction,let target=request.renderContext.newPixelBuffer() else { request.finish(with:SubtitleError.invalid(L("无法创建合成画面"))); return }
             let size=request.renderContext.size,bounds=CGRect(origin:.zero,size:size)
-            let ms=Int64(CMTimeGetSeconds(request.compositionTime)*1000)
+            let ms=Int64((CMTimeGetSeconds(request.compositionTime)*1000*instruction.speed).rounded())
             var result=CIImage(color:CIColor(red:0,green:0,blue:0)).cropped(to:bounds)
             for layer in instruction.layers {
+                let pip=instruction.project.layers.first{$0.id == layer.placement.clip.id}
+                if pip?.hidden ?? instruction.project.isVideoHidden { continue }
                 guard let buffer=request.sourceFrame(byTrackID:layer.trackID) else { request.finish(with:SubtitleError.invalid(L("读取视频片段失败"))); return }
                 let flip=CGAffineTransform(scaleX:1,y:-1)
                 var frame=CIImage(cvPixelBuffer:buffer).transformed(by:flip).transformed(by:layer.transform).transformed(by:flip)

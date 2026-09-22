@@ -146,3 +146,128 @@ func runMusicChecks(directory: URL) throws {
     try VideoExporter().run(project:project,destination:directory.appendingPathComponent("muted.mp4"),progress:{_ in})
     print("PASS music preview mix, clipped duration, original audio mute and both exports")
 }
+
+func runMultiTrackChecks(directory: URL) throws {
+    let a=directory.appendingPathComponent("a.mp4"),b=directory.appendingPathComponent("b.mp4")
+    var p=try Project().replacingClips([VideoClip(path:a.path,duration:2000)])
+    var upper=VideoLayer(clip:VideoClip(path:b.path,duration:2000),start:500)
+    // Legacy geometry must no longer create a small image.
+    upper.x=0.75; upper.y=0.75; upper.scale=0.4
+    p=try p.replacingLayers([upper]); p=try p.cuttingLayer(upper.id,at:1500)
+    try p.write(directory.appendingPathComponent("multitrack.frzh"))
+    func pixel(_ frame:CGImage,_ x:Int,_ y:Int)->[UInt8] {
+        var bytes=[UInt8](repeating:0,count:4)
+        CIContext().render(CIImage(cgImage:frame),toBitmap:&bytes,rowBytes:4,bounds:CGRect(x:x,y:y,width:1,height:1),format:.RGBA8,colorSpace:CGColorSpace(name:CGColorSpace.sRGB))
+        return bytes
+    }
+    func requireBlue(_ frame:CGImage) throws {
+        for point in [(20,20),(160,90),(300,160)] {
+            let color=pixel(frame,point.0,point.1)
+            guard color[2]>150,color[0]<80 else { throw SubtitleError.invalid("Upper track did not fill canvas: \(color)") }
+        }
+    }
+    let preview=try EditedAsset(project:p,color:.sdr,subtitles:false)
+    let generator=AVAssetImageGenerator(asset:preview.asset); generator.videoComposition=preview.video
+    generator.requestedTimeToleranceBefore = .zero; generator.requestedTimeToleranceAfter = .zero
+    try requireBlue(generator.copyCGImage(at:CMTime(value:1000,timescale:1000),actualTime:nil))
+    let outputURL=directory.appendingPathComponent("multitrack.mp4")
+    try VideoExporter().run(project:p,destination:outputURL) {_ in}
+    let output=AVURLAsset(url:outputURL),images=AVAssetImageGenerator(asset:output)
+    images.requestedTimeToleranceBefore = .zero; images.requestedTimeToleranceAfter = .zero
+    try requireBlue(images.copyCGImage(at:CMTime(value:2000,timescale:1000),actualTime:nil))
+    guard abs(CMTimeGetSeconds(output.duration)-2.5)<0.1 else { throw SubtitleError.invalid("Multitrack output duration failed") }
+    let timeline=TimelineView(frame:NSRect(x:0,y:0,width:900,height:400)); timeline.project=p; timeline.pointsPerSecond=180
+    let window=NSWindow(contentRect:timeline.bounds,styleMask:[.titled],backing:.buffered,defer:false)
+    window.contentView=timeline; timeline.layoutSubtreeIfNeeded()
+    guard timeline.videoRowY(p.layers[0].id)==timeline.videoRowY(p.layers[1].id) else { throw SubtitleError.invalid("Split moved to another row") }
+    let controls=timeline.subviews.compactMap{$0 as? NSButton}.filter{$0.identifier?.rawValue==upper.trackIdentifier.uuidString}.sorted{$0.tag<$1.tag}
+    var calls:[Int]=[]
+    timeline.toggleLayerTrackControl={ id,control in
+        guard id==upper.trackIdentifier else { return }; calls.append(control)
+        var values=timeline.project.layers
+        for i in values.indices {
+            switch control { case 0: values[i].locked=true; case 1: values[i].hidden=true; default: values[i].muted=true }
+        }
+        timeline.project.videoLayers=values; timeline.layoutSubtreeIfNeeded()
+    }
+    guard controls.count==3 else { throw SubtitleError.invalid("Multitrack controls missing") }
+    for button in controls { button.performClick(nil) }
+    guard calls==[0,1,2],controls.allSatisfy({$0.state == .on}) else { throw SubtitleError.invalid("Multitrack controls failed") }
+    let hidden=try EditedAsset(project:timeline.project,color:.sdr,subtitles:false)
+    guard hidden.asset.tracks(withMediaType:.audio).count==1 else { throw SubtitleError.invalid("Track mute did not affect all clips") }
+    let hiddenFrames=AVAssetImageGenerator(asset:hidden.asset); hiddenFrames.videoComposition=hidden.video
+    let red=pixel(try hiddenFrames.copyCGImage(at:CMTime(value:1000,timescale:1000),actualTime:nil),160,90)
+    guard red[0]>150,red[2]<80 else { throw SubtitleError.invalid("Hidden upper track did not reveal lower video") }
+    timeline.project=p; timeline.layoutSubtreeIfNeeded()
+    func event(_ type:NSEvent.EventType,_ point:NSPoint)->NSEvent {
+        NSEvent.mouseEvent(with:type,location:timeline.convert(point,to:nil),modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)!
+    }
+    var moved:VideoLayer?; timeline.moveVideoLayer={moved=$0}
+    timeline.transferVideoClip={id,destination,time in
+        moved=(try? timeline.project.transferringClip(id,to:destination,at:time))?.layers.first{$0.id == id}
+    }
+    let source=NSPoint(x:timeline.x(2000),y:timeline.videoRowY(p.layers[1].id)+35)
+    timeline.mouseDown(with:event(.leftMouseDown,source))
+    let target=NSPoint(x:source.x+90,y:source.y)
+    timeline.mouseDragged(with:event(.leftMouseDragged,target)); timeline.mouseUp(with:event(.leftMouseUp,target))
+    guard moved?.start==2000,moved?.trackIdentifier==upper.trackIdentifier else { throw SubtitleError.invalid("Track clip movement failed") }
+    let cross=try p.addingLayer(from:p.clips[0].id,at:3000)
+    timeline.project=cross; timeline.layoutSubtreeIfNeeded(); moved=nil
+    let crossSource=NSPoint(x:timeline.x(2000),y:timeline.videoRowY(p.layers[1].id)+35)
+    let crossTarget=NSPoint(x:crossSource.x,y:timeline.videoRowY(cross.layers[0].id)+35)
+    timeline.mouseDown(with:event(.leftMouseDown,crossSource))
+    timeline.mouseDragged(with:event(.leftMouseDragged,crossTarget)); timeline.mouseUp(with:event(.leftMouseUp,crossTarget))
+    guard moved?.trackIdentifier==cross.layers[0].trackIdentifier,moved?.start==1500 else { throw SubtitleError.invalid("Cross-track drag failed") }
+    var contextAction:Int?
+    timeline.editVideoTrack={_,action in contextAction=action}
+    guard let menu=timeline.menu(for:event(.rightMouseDown,NSPoint(x:20,y:crossTarget.y))),menu.items.count==3 else { throw SubtitleError.invalid("Track context menu missing") }
+    menu.performActionForItem(at:0)
+    guard contextAction==0 else { throw SubtitleError.invalid("Track deletion menu callback failed") }
+    let main=try Project().replacingClips([VideoClip(path:a.path,duration:2000),VideoClip(path:b.path,duration:2000)])
+    timeline.project=main; timeline.layoutSubtreeIfNeeded()
+    var reordered:UUID?; var insertion:Int64?
+    timeline.transferVideoClip={id,destination,time in if destination == .main { reordered=id; insertion=time } }
+    let mainStart=NSPoint(x:timeline.x(1000),y:timeline.videoY+35),mainEnd=NSPoint(x:timeline.x(6000),y:timeline.videoY+35)
+    timeline.mouseDown(with:event(.leftMouseDown,mainStart)); timeline.mouseDragged(with:event(.leftMouseDragged,mainEnd)); timeline.mouseUp(with:event(.leftMouseUp,mainEnd))
+    guard reordered==main.clips[0].id,insertion==5000 else { throw SubtitleError.invalid("Main track absolute movement failed") }
+    var transferred:Project?; var transferCount=0
+    timeline.transferVideoClip={id,destination,time in
+        transferred=try? timeline.project.transferringClip(id,to:destination,at:time); transferCount+=1
+    }
+    timeline.project=main; timeline.layoutSubtreeIfNeeded()
+    let existing=try main.addingLayer(from:main.clips[0].id,at:5000)
+    timeline.project=existing; timeline.layoutSubtreeIfNeeded()
+    let fromMain=NSPoint(x:timeline.x(1000),y:timeline.videoY+35)
+    let toUpper=NSPoint(x:fromMain.x,y:timeline.videoRowY(existing.layers[0].id)+35)
+    timeline.mouseDown(with:event(.leftMouseDown,fromMain)); timeline.mouseDragged(with:event(.leftMouseDragged,toUpper)); timeline.mouseUp(with:event(.leftMouseUp,toUpper))
+    guard let onUpper=transferred,onUpper.layerTracks[0].count==2,onUpper.clips.count==1,onUpper.layers.contains(where:{$0.id==main.clips[0].id}),transferCount==1 else { throw SubtitleError.invalid("Main-to-existing timeline transfer failed") }
+    timeline.project=onUpper; timeline.layoutSubtreeIfNeeded(); transferred=nil
+    let fromUpper=NSPoint(x:timeline.x(1000),y:timeline.videoRowY(main.clips[0].id)+35)
+    let toNew=NSPoint(x:fromUpper.x,y:timeline.newLayerY+20)
+    timeline.mouseDown(with:event(.leftMouseDown,fromUpper)); timeline.mouseDragged(with:event(.leftMouseDragged,toNew)); timeline.mouseUp(with:event(.leftMouseUp,toNew))
+    guard let onNew=transferred,onNew.layerTracks.count==2,onNew.layers.first?.id==main.clips[0].id,transferCount==2 else { throw SubtitleError.invalid("Timeline new-track transfer failed") }
+    timeline.project=onNew; timeline.layoutSubtreeIfNeeded(); transferred=nil
+    let backStart=NSPoint(x:timeline.x(1000),y:timeline.videoRowY(main.clips[0].id)+35),backEnd=NSPoint(x:timeline.x(1000),y:timeline.videoY+35)
+    timeline.mouseDown(with:event(.leftMouseDown,backStart)); timeline.mouseDragged(with:event(.leftMouseDragged,backEnd)); timeline.mouseUp(with:event(.leftMouseUp,backEnd))
+    guard let back=transferred,back.clips.map(\.id)==main.clips.map(\.id),transferCount==3 else { throw SubtitleError.invalid("Timeline transfer back to main failed") }
+    timeline.project=back; timeline.layoutSubtreeIfNeeded(); transferred=nil
+    let cancelStart=NSPoint(x:timeline.x(1000),y:timeline.videoY+35),cancelEnd=NSPoint(x:timeline.x(1000),y:timeline.newLayerY+20)
+    timeline.mouseDown(with:event(.leftMouseDown,cancelStart)); timeline.mouseDragged(with:event(.leftMouseDragged,cancelEnd)); timeline.cancelOperation(nil); timeline.mouseUp(with:event(.leftMouseUp,cancelEnd))
+    guard transferred==nil,transferCount==3 else { throw SubtitleError.invalid("Cancelled timeline transfer committed") }
+    print("PASS main/existing/new track transfers, stable clip IDs, single completion and Esc cancellation")
+    let delayed=try Project().replacingClips([VideoClip(path:a.path,duration:2000)])
+    let delayedProject=try delayed.movingMainClip(delayed.clips[0].id,to:5000)
+    let delayedURL=directory.appendingPathComponent("delayed-main.mp4")
+    try VideoExporter().run(project:delayedProject,destination:delayedURL) {_ in}
+    let delayedAsset=AVURLAsset(url:delayedURL),delayedFrames=AVAssetImageGenerator(asset:AVURLAsset(url:delayedURL))
+    delayedFrames.requestedTimeToleranceBefore = .zero; delayedFrames.requestedTimeToleranceAfter = .zero
+    let empty=pixel(try delayedFrames.copyCGImage(at:CMTime(value:1000,timescale:1000),actualTime:nil),160,90)
+    let filled=pixel(try delayedFrames.copyCGImage(at:CMTime(value:5500,timescale:1000),actualTime:nil),160,90)
+    guard empty.prefix(3).allSatisfy({$0<15}),filled[0]>150,filled[2]<80,abs(CMTimeGetSeconds(delayedAsset.duration)-7)<0.1 else { throw SubtitleError.invalid("Delayed main video export timing failed") }
+    timeline.project=try cross.movingMainClip(cross.clips[0].id,to:5000); timeline.layoutSubtreeIfNeeded()
+    if let bitmap=timeline.bitmapImageRepForCachingDisplay(in:timeline.bounds) {
+        timeline.cacheDisplay(in:timeline.bounds,to:bitmap)
+        try bitmap.representation(using:.png,properties:[:])?.write(to:directory.appendingPathComponent("tracks-"+InterfaceLanguage.current.rawValue+".png"))
+    }
+    print("MULTITRACK_CHECKS_OK full-canvas preview/export, split row, track controls, mute, hide, timeline movement, cross-track drag, track menu and main movement to 5 seconds with leading black export")
+}

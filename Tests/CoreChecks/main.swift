@@ -322,5 +322,156 @@ check("Long music retains full source range without extending video export durat
     let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
     return restored.music[0].sourceEnd==120000 && restored.music[0].duration==120000 && restored.timelineExtent==125000 && restored.duration==41000
 }
+check("Video track flags preserve legacy defaults and round trip independently") {
+    var p=Project()
+    let legacy=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(p))
+    guard !legacy.isVideoLocked && !legacy.isVideoHidden && !legacy.isVideoMuted else { return false }
+    p.lockVideoTrack=true; p.hideVideoTrack=true; p.muteVideoAudio=false
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(p))
+    return restored.isVideoLocked && restored.isVideoHidden && !restored.isVideoMuted
+}
+check("Project speed preserves editing times and round trips") {
+    var p=Project(); p.duration=10000
+    guard p.speed==1 && p.exportDuration==10000 else { return false }
+    p.playbackRate=2
+    let q=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(p))
+    guard q.speed==2 && q.exportDuration==5000 && q.duration==10000 else { return false }
+    p.playbackRate=0.25
+    return p.exportDuration==40000
+}
+check("Reject invalid project speed") {
+    [0.0,0.1,3,Double.infinity,Double.nan].allSatisfy { speed in
+        var p=Project(); p.playbackRate=speed; return rejects { try p.validate() }
+    }
+}
+check("Media insertion duplicates range with fresh ID and ripples existing subtitles") {
+    var p=Project(); var a=VideoClip(path:"a.mp4",duration:4000); a.sourceStart=1000
+    let b=VideoClip(path:"b.mp4",duration:2000)
+    p=try p.replacingClips([a,b]); p.cues=[Cue(language:.fr,start:3500,end:4000,text:"B")]
+    let q=try p.insertingCopy(of:a.id,at:1)
+    return q.clips.count==3 && q.clips[1].id != a.id && q.clips[1].sourceStart==1000 && q.duration==8000 && q.cues.count==1 && q.cues[0].start==6500 && p.duration==5000
+}
+check("Media insertion accepts endpoints and rejects locked or invalid drops") {
+    var p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    let id=p.clips[0].id
+    guard try p.insertingCopy(of:id,at:0).duration==4000,try p.insertingCopy(of:id,at:1).duration==4000 else { return false }
+    guard rejects({ _ = try p.insertingCopy(of:id,at:2) }),rejects({ _ = try p.insertingCopy(of:UUID(),at:0) }) else { return false }
+    p.lockVideoTrack=true
+    return rejects { _ = try p.insertingCopy(of:id,at:0) }
+}
+check("PiP tracks retain absolute time and extend duration without moving main captions") {
+    var p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    p.cues=[Cue(language:.fr,start:0,end:1000,text:"Main")]
+    let q=try p.addingLayer(from:p.clips[0].id,at:1500)
+    guard q.duration==3500,q.clips==p.clips,q.cues==p.cues,q.layers[0].id != p.clips[0].id else { return false }
+    var layers=q.layers; layers[0].start=500
+    let r=try q.replacingLayers(layers)
+    let removed=try r.replacingLayers([])
+    return r.duration==2500 && r.cues==p.cues && removed.duration==2000
+}
+check("PiP stacking and project persistence preserve independent position and visibility") {
+    let p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    let q=try p.addingLayer(from:p.clips[0].id,at:0)
+    var r=try q.addingLayer(from:p.clips[0].id,at:100)
+    r.videoLayers![0].x=0.3; r.videoLayers![0].scale=0.6; r.videoLayers![0].muted=true
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(r))
+    try restored.validate()
+    return restored==r && restored.renderPlacements.last?.clip.id==r.layers[0].id && p.layers.isEmpty
+}
+check("PiP rejects invalid geometry and IDs, survives deleting main video") {
+    let p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    let q=try p.addingLayer(from:p.clips[0].id,at:1000)
+    var bad=q.layers; bad[0].scale=0
+    guard rejects({ _ = try q.replacingLayers(bad) }) else { return false }
+    bad=q.layers; bad[0].clip.id=p.clips[0].id
+    guard rejects({ _ = try q.replacingLayers(bad) }) else { return false }
+    let r=try q.replacingClips([])
+    return r.duration==3000 && r.clips.isEmpty && r.allClips.count==1 && !r.videoPath.isEmpty
+}
+check("PiP lock defaults off in legacy projects and persists independently") {
+    var layer=VideoLayer(clip:VideoClip(path:"a.mp4",duration:2000),start:0)
+    let legacy=try JSONDecoder().decode(VideoLayer.self,from:JSONEncoder().encode(layer))
+    guard !legacy.isLocked else { return false }
+    layer.locked=true; layer.hidden=true; layer.muted=true
+    let restored=try JSONDecoder().decode(VideoLayer.self,from:JSONEncoder().encode(layer))
+    return restored.isLocked && restored.hidden && restored.muted && restored==layer
+}
+check("Multiple clips share a track and splitting preserves its row and timing") {
+    let base=try Project().replacingClips([VideoClip(path:"main.mp4",duration:5000)])
+    let p=try base.addingLayer(from:base.clips[0].id,at:1000)
+    let split=try p.cuttingLayer(p.layers[0].id,at:3000)
+    guard split.layerTracks.count==1,split.layerTracks[0].count==2,split.layers[1].clip.sourceStart==2000,split.duration==6000 else { return false }
+    let appended=try split.addingLayer(from:base.clips[0].id,at:6000,trackID:split.layers[0].trackIdentifier)
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(appended)); try restored.validate()
+    let deleted=try restored.replacingLayers(Array(restored.layers.dropFirst()))
+    return deleted.layerTracks.count==1 && deleted.layerTracks[0].count==2 && restored==appended
+}
+check("Same-track collisions and locked destinations reject edits without moving captions") {
+    var base=try Project().replacingClips([VideoClip(path:"main.mp4",duration:5000)])
+    base.cues=[Cue(language:.zh,start:1000,end:2000,text:"字幕")]
+    let p=try base.addingLayer(from:base.clips[0].id,at:0)
+    let id=p.layers[0].trackIdentifier
+    guard rejects({ _ = try p.addingLayer(from:base.clips[0].id,at:4000,trackID:id) }) else { return false }
+    var locked=p; locked.videoLayers?[0].locked=true
+    guard rejects({ _ = try locked.addingLayer(from:base.clips[0].id,at:5000,trackID:id) }) else { return false }
+    let split=try p.cuttingLayer(p.layers[0].id,at:2000)
+    var collision=split.layers[1]; collision.start=1000
+    return rejects({ _ = try split.replacingLayer(collision) }) && split.cues==base.cues
+}
+check("Moving between video tracks preserves destination order and inherited controls") {
+    let base=try Project().replacingClips([VideoClip(path:"main.mp4",duration:2000)])
+    let first=try base.addingLayer(from:base.clips[0].id,at:0)
+    let p=try first.addingLayer(from:base.clips[0].id,at:4000)
+    var moved=p.layers[0]; moved.trackID=p.layers[1].trackIdentifier; moved.start=2000
+    let q=try p.replacingLayer(moved)
+    return q.layerTracks.count==1 && q.layerTracks[0].count==2 && q.layerTracks[0][1].id==moved.id && q.layers.allSatisfy{$0.scale==1 && $0.x==0.5 && $0.y==0.5}
+}
+check("Main video can start at five seconds with captions and persistence") {
+    var p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    p.cues=[Cue(language:.fr,start:200,end:900,text:"Caption")]
+    let q=try p.movingMainClip(p.clips[0].id,to:5000)
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q)); try restored.validate()
+    let split=try q.splittingClip(q.clips[0].id,at:6000)
+    return q.placements[0].start==5000 && q.duration==7000 && q.cues[0].start==5200 && restored==q && split.placements.map(\.start)==[5000,6000] && split.duration==7000
+}
+check("Main movement keeps other video and music positions and rejects collision or lock") {
+    var p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000),VideoClip(path:"b.mp4",duration:2000)])
+    let a=p.clips[0].id,b=p.clips[1].id
+    p.backgroundMusic=[BackgroundMusic(path:"music.mp3",duration:10000)]
+    guard rejects({ _ = try p.movingMainClip(a,to:1000) }) else { return false }
+    let q=try p.movingMainClip(a,to:5000)
+    guard q.placements.first(where:{$0.clip.id==b})?.start==2000,q.placements.first(where:{$0.clip.id==a})?.start==5000,q.music==p.music else { return false }
+    let layer=try q.addingLayer(from:a,at:0)
+    guard layer.layers[0].clip.gap==0 else { return false }
+    var locked=p; locked.lockVideoTrack=true
+    return rejects { _ = try locked.movingMainClip(a,to:5000) }
+}
+check("Timeline transfer moves original clip to new track without rippling others") {
+    var p=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000),VideoClip(path:"b.mp4",duration:2000)])
+    p.cues=[Cue(language:.fr,start:2500,end:3000,text:"Caption")]
+    let id=p.clips[0].id,other=p.clips[1].id
+    let q=try p.transferringClip(id,to:.newTrack,at:5000)
+    guard q.layers.count==1,q.layers[0].id==id,q.layers[0].start==5000,q.placements[0].clip.id==other,q.placements[0].start==2000,q.cues==p.cues else { return false }
+    let r=try q.transferringClip(id,to:.main,at:0)
+    return r.layers.isEmpty && r.placements.map(\.start)==[0,2000] && r.clips.map(\.id)==p.clips.map(\.id)
+}
+check("Transfer into existing track inherits controls and rejects occupied or locked destinations") {
+    let base=try Project().replacingClips([VideoClip(path:"a.mp4",duration:2000)])
+    var p=try base.addingLayer(from:base.clips[0].id,at:0)
+    p.videoLayers?[0].muted=true
+    let track=p.layers[0].trackIdentifier,id=p.clips[0].id
+    guard rejects({ _ = try p.transferringClip(id,to:.track(track),at:1000) }) else { return false }
+    let q=try p.transferringClip(id,to:.track(track),at:2000)
+    guard q.clips.isEmpty,q.layerTracks.count==1,q.layerTracks[0].count==2,q.layers.allSatisfy({$0.muted}) else { return false }
+    var locked=p; locked.videoLayers?[0].locked=true
+    return rejects { _ = try locked.transferringClip(id,to:.track(track),at:2000) }
+}
+check("Moving one split clip to a new track preserves the original track and locked main") {
+    let base=try Project().replacingClips([VideoClip(path:"a.mp4",duration:4000)])
+    let p=try base.addingLayer(from:base.clips[0].id,at:0)
+    var split=try p.cuttingLayer(p.layers[0].id,at:2000); split.lockVideoTrack=true
+    let q=try split.transferringClip(split.layers[0].id,to:.newTrack,at:0)
+    return q.layerTracks.count==2 && q.layerTracks[0][0].id==split.layers[0].id && q.layerTracks[0][0].trackIdentifier != split.layerTracks[0][0].trackIdentifier && q.clips==split.clips
+}
 print("\(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0:1)

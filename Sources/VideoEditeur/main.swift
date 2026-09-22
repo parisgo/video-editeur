@@ -67,16 +67,21 @@ if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--check-music" 
 } else if CommandLine.arguments.count >= 4,CommandLine.arguments[1] == "--smoke-erase" {
     _=NSApplication.shared
     do { try runRegionEraseChecks(source:URL(fileURLWithPath:CommandLine.arguments[2]),destination:URL(fileURLWithPath:CommandLine.arguments[3])) } catch { fputs("\(error)\n",stderr); exit(1) }
+ } else if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--smoke-multitrack" {
+    _=NSApplication.shared
+    do { try runMultiTrackChecks(directory:URL(fileURLWithPath:CommandLine.arguments[2])) } catch { fputs("\(error)\n",stderr); exit(1) }
 } else if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--smoke-editing" {
     _=NSApplication.shared
     do { try runEditingChecks(directory:URL(fileURLWithPath:CommandLine.arguments[2])) } catch { fputs("\(error)\n",stderr); exit(1) }
 } else if CommandLine.arguments.count >= 4,CommandLine.arguments[1] == "--smoke-services" {
     _=NSApplication.shared
     do { try runServiceChecks(video:URL(fileURLWithPath:CommandLine.arguments[2]),directory:URL(fileURLWithPath:CommandLine.arguments[3])) } catch { fputs("\(error)\n",stderr); exit(1) }
-} else if CommandLine.arguments.count >= 4,CommandLine.arguments[1] == "--smoke-export" {
+} else if CommandLine.arguments.count >= 4,["--smoke-export","--smoke-export-hidden"].contains(CommandLine.arguments[1]) {
     let source=URL(fileURLWithPath:CommandLine.arguments[2]),destination=URL(fileURLWithPath:CommandLine.arguments[3])
     let asset=AVURLAsset(url:source); var p=Project(); p.videoPath=source.path; p.duration=Int64(CMTimeGetSeconds(asset.duration)*1000)
     p.cues=[Cue(language:.fr,start:0,end:min(1500,p.duration),text:"Bonjour ! Une nouvelle histoire."),Cue(language:.zh,start:0,end:min(1500,p.duration),text:L("你好 一段新的故事")),Cue(language:.zh,start:min(1500,p.duration),end:p.duration,text:L("让每一句话 都被看见"))].filter{$0.end>$0.start}
+    if CommandLine.arguments.count >= 5 { p.playbackRate=Double(CommandLine.arguments[4]) }
+    if CommandLine.arguments[1] == "--smoke-export-hidden" { p.hideVideoTrack=true; p.cues=[] }
     let app=NSApplication.shared; _=app
     do { try VideoExporter().run(project:p,destination:destination) { _ in }; print("EXPORT_OK \(destination.path)") } catch { fputs("\(error)\n",stderr); exit(1) }
 } else if CommandLine.arguments.count >= 4,CommandLine.arguments[1] == "--smoke-generate" {

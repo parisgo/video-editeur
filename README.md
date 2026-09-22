@@ -50,6 +50,29 @@ Default French subtitles use Avenir Next Condensed at size 60, with white text a
 
 Use **New** (`⌘N`, or File → New Project) for a blank project. This clears media, subtitles, text tracks, preview, playhead, and undo history. Unsaved work prompts you to save, discard, or cancel; cancelling a save does not clear the project. Source files and saved projects are not deleted. Finish or cancel generation/export before starting a new project.
 
+Drag local videos or audio files from Finder onto the Media card area to append them to the current project. Multiple files are supported; the area highlights when the drop is accepted. Unsupported files are rejected. Dropping clears the filename filter so new cards are visible. Undo with ⌘Z. Drops are disabled during generation/export, and a locked video track rejects video additions. Dropping onto the central preview still starts a new project.
+
+The Media panel uses a responsive thumbnail-card grid, with a **+** import button and filename search at the top. Cards show a preview (or a music-note icon), duration, an Added badge, and the filename below. Click to select the corresponding timeline clip; double-click to open editing settings. Hover to see the full name. Video previews load asynchronously from the retained source range. The Subtitles tab keeps its track list. The sidebar scrollbar uses an auto-hiding overlay and does not reserve a permanent strip on the right.
+
+Drag a video card from Media onto the video track to insert a copy. The insertion line snaps before or after a clip; dropping past the sequence end appends it. The copy retains the card’s source range and effects, with a new clip ID and no incoming dissolve. Existing video and subtitle timings ripple forward; existing subtitles are not copied to the new clip. Music keeps its absolute timing. Use ⌘Z to undo. Locked tracks and active generation/export reject the drop.
+
+## Multiple video tracks
+
+Video tracks render at the full canvas size, preserving aspect ratio with black bars where needed. Upper visible tracks cover lower tracks; all unmuted audio tracks are mixed. PiP sizing, positioning, preview dragging, and PiP controls have been removed. Existing PiP projects reopen as ordinary video tracks, preserving source files, timing, effects, and track states; their former position and size no longer affect playback or export.
+
+- Drag a Media card into the area below the timeline to create a new video track, or onto an existing additional track to place another clip at the drop time. Each track supports multiple clips; overlapping clips on the same track are rejected.
+- Drag a timeline video clip by its body onto **any other video track**, including Video 1, or into the bottom drop area to create a new track. This moves the original clip with its source range, effects, and ID. Other clips and music stay in place; cross-track moves leave subtitles at their existing times. Existing destination tracks apply their own hide/mute settings. A turquoise outline marks a valid placement; red means overlap or a locked destination. Release to commit once, ⌘Z to undo, or Esc to cancel. Drag clip edges to trim.
+- Split at the playhead with ⌘B or the split button. Both pieces stay on the same track. Delete removes only the selected clip; deleting the last clip removes the empty row.
+- Right-click an additional video track for **Move Track Up**, **Move Track Down**, or **Delete Track**. Moving a track changes the order in which videos cover one another; deleting it removes every clip in that track. Locked tracks cannot be changed. Undo restores the operation.
+- Double-click a clip to edit its start time, source in/out, fades, brightness, contrast, and saturation. Each track has independent lock, hide, and mute buttons; they affect every clip on that track and are saved with the project.
+- The bottom Video 1 track supports dragging a clip body to an exact start time, including leaving an initial gap (for example, 00:05). Other video clips and music keep their positions; associated subtitles follow the moved clip. Same-track overlaps are rejected. Remove an adjacent dissolve before moving a clip involved in that transition. Card drops still insert copies, and trimming retains ripple editing and subtitle remapping. Background music remains at its absolute time.
+
+The project ends at the latest video endpoint. Gaps reveal lower tracks, or black if no track supplies an image. Preview and export use the same composition and project speed. Edits support undo/redo and saving; generation/export disables editing.
+
+## Playback and export speed
+
+Use the speed menu beside Play to choose 0.25×, 0.5×, 0.75×, 1×, 1.25×, 1.5×, or 2×. This is a whole-project setting: both preview and exported video use it. At 2×, output duration is halved; at 0.5× it doubles. Video, subtitles, text, transitions, original audio, and background music are retimed together, with audio pitch preservation. The editing timeline and its timestamps stay in original project time. Transcription also uses original timing. Speed is saved in the project and supports undo; old projects default to 1×. This does not provide individual clip speed ramps.
+
 ## Multiple videos, effects, and HDR
 
 - Append media using **Add Media** (`⌘I`). Videos are arranged sequentially. The top **Import Video** action still starts a new project.
@@ -64,7 +87,11 @@ Use **New** (`⌘N`, or File → New Project) for a blank project. This clears m
 
 Three timeline buttons next to the editing/effects control provide **Split**, **Remove Before Playhead**, and **Remove After Playhead**. They act on selected video or music; without a selection, the video under the playhead is used. The playhead must be inside the clip. Video trimming closes the timeline gap and adjusts subtitles; music trimming leaves video and subtitles in place. Source files are never deleted.
 
+Video clips use a teal header with filename and duration, a filmstrip in the middle, and a source-audio waveform below. Dark seams separate clips; the selected clip has a white rounded outline and trim handles. Waveforms load asynchronously from the retained source range and show the first source audio track, independently of mute and effects. Missing or unavailable audio shows a baseline. These visual separators do not introduce playback gaps.
+
 The video track displays filmstrip thumbnails sampled from each clip's retained source range. Trimming, splitting, or replacing a video reloads them asynchronously. Thumbnails show the original source, without subtitle or color effects.
+
+The left side of the video track has three controls: **Lock**, **Hide**, and **Mute**. Lock blocks video clip edits (including split, trim, reorder, delete, and appending videos), while selection and playback remain available. Hide removes source video imagery from both preview and export, leaving a black canvas with any visible subtitles; audio is controlled separately. Mute synchronizes with **Mute Original Video** and leaves background music unchanged. All three states are saved with the project and support undo.
 
 ## Background music and muting video audio
 
@@ -74,7 +101,7 @@ The full audio duration is retained on import. Scroll horizontally to see longer
 
 Select music and place the playhead inside its clip to use **Split (`⌘B`) / Remove Before / Remove After**. Splitting retains source positions and volume without moving video or subtitles. Delete removes the selected music; `⌘Z` restores it. Clicking the timeline ruler seeks while keeping the music selected. There are no separate add/edit/delete music buttons.
 
-**Mute Original Video** silences every video's original audio while leaving music audible. Preview and export share the same mix. Music beyond the video end is not exported; shorter music does not loop automatically. Multiple music clips can overlap. Paths, source ranges, start positions, volume, and mute state are saved with the project. Missing music can be relocated when reopening.
+Use the speaker button on the left of each video track to mute its original audio; the main track and each additional video track are independent, and background music remains audible. The separate **Mute Video Audio** toolbar checkbox has been removed, along with its empty toolbar row. Preview and export share the same mix. Music beyond the video end is not exported; shorter music does not loop automatically. Multiple music clips can overlap. Paths, source ranges, start positions, volume, and mute state are saved with the project. Missing music can be relocated when reopening.
 
 Subtitle transcription always uses the original video audio, excluding background music and ignoring the mute switch.
 
@@ -111,7 +138,7 @@ MLX is tried first, with faster-whisper as fallback. MLX and video export checks
 
 Recovery data, task logs, temporary audio, and internal SRT files live in `~/Library/Application Support/VideoEditeur/`. Relaunching restores the previous project. Interrupted generation retains batch caches for continuation. Manual edits start a new task so retries do not overwrite them. Unnamed projects are archived under `Recovered Projects/` before switching videos. Task caches are not automatically removed; you can clean `Jobs/` when no task is running.
 
-Projects reference media without copying it. Share the source files alongside a `.frzh` project. Inputs must be decodable by AVFoundation. This version exports burned-in video only, with no standalone subtitle-export button. It does not include picture-in-picture layers, speed changes, keyframes, or soft-subtitle muxing.
+Projects reference media without copying it. Share the source files alongside a `.frzh` project. Inputs must be decodable by AVFoundation. This version exports burned-in video only, with no standalone subtitle-export button. It does not include picture-in-picture layers, per-clip speed ramps, keyframes, or soft-subtitle muxing.
 
 ## Building and verification
 

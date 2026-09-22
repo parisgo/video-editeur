@@ -29,6 +29,9 @@ public struct VideoClip: Codable, Equatable, Identifiable {
     public var sourceDuration: Int64
     public var sourceStart: Int64
     public var sourceEnd: Int64
+    /// Empty time before this main-track clip. Legacy projects default to zero.
+    public var timelineGap: Int64?
+    public var gap: Int64 { timelineGap ?? 0 }
     /// Cross dissolve into this clip; zero means a straight cut.
     public var transition: Int64 = 0
     public var effects = ClipEffects()
@@ -50,7 +53,7 @@ extension Project {
     public var placements: [ClipPlacement] {
         var cursor: Int64=0
         return clips.enumerated().map { i,clip in
-            let start=cursor-(i == 0 ? 0 : clip.transition)
+            let start=cursor+clip.gap-(i == 0 ? 0 : clip.transition)
             cursor=start+clip.duration
             return ClipPlacement(clip:clip,start:start)
         }
@@ -69,7 +72,7 @@ extension Project {
                 if let color=region.color,!([color.r,color.g,color.b,color.a].allSatisfy{$0.isFinite && (0...1).contains($0)}) { throw SubtitleError.invalid(L("去字背景颜色无效")) }
             }
             let e=c.effects
-            guard !c.path.isEmpty,c.sourceDuration>0,c.sourceStart>=0,c.sourceEnd<=c.sourceDuration,c.duration>0,
+            guard c.gap>=0,c.gap<1_000_000_000,(c.transition == 0 || c.gap == 0),!c.path.isEmpty,c.sourceDuration>0,c.sourceStart>=0,c.sourceEnd<=c.sourceDuration,c.duration>0,
                   c.transition>=0,c.transition <= c.duration/2,
                   (i == 0 ? c.transition == 0 : c.transition <= clips[i-1].duration/2),
                   e.brightness.isFinite,(-1...1).contains(e.brightness),e.contrast.isFinite,(0...2).contains(e.contrast),
@@ -78,14 +81,14 @@ extension Project {
             }
         }
         if videoClips != nil {
-            guard placements.last?.end ?? 0 == duration else { throw SubtitleError.invalid(L("剪辑时间轴长度不一致")) }
+            guard videoDuration == duration else { throw SubtitleError.invalid(L("剪辑时间轴长度不一致")) }
         }
     }
     /// Ripple edit: carry captions with their source clip. During a dissolve,
     /// caption ownership switches at the midpoint so same-language cues never overlap.
     public func replacingClips(_ clips: [VideoClip], origins: [UUID:UUID] = [:]) throws -> Project {
-        var next=self; next.videoClips=clips; next.videoPath=clips.first?.path ?? ""
-        next.duration=next.placements.last?.end ?? 0
+        var next=self; next.videoClips=clips; next.videoPath=next.allClips.first?.path ?? ""
+        next.duration=next.videoDuration
         try next.validateClips()
         let old=placements, new=next.placements
         func visible(_ placements: [ClipPlacement],_ i: Int) -> (Int64,Int64) {
@@ -106,8 +109,41 @@ extension Project {
                 if used.contains(c.id) { c.id=UUID() }; used.insert(c.id); mapped.append(c)
             }
         }
+        let oldMainEnd=old.last?.end ?? 0
+        let tailOffset=(new.last?.end ?? 0)-oldMainEnd
+        for cue in cues where cue.end>oldMainEnd {
+            var tail=cue; tail.start=max(cue.start,oldMainEnd)+tailOffset; tail.end=min(cue.end+tailOffset,next.duration)
+            guard tail.end>tail.start else { continue }
+            if used.contains(tail.id) { tail.id=UUID() }; used.insert(tail.id); mapped.append(tail)
+        }
         next.cues=mapped.sorted{$0.start<$1.start}
         try next.validate(); return next
+    }
+    public func movingMainClip(_ id: UUID,to time: Int64) throws -> Project {
+        guard !isVideoLocked else { throw SubtitleError.invalid(L("视频轨道已锁定，请先解锁")) }
+        guard time>=0,time<1_000_000_000,placements.contains(where:{$0.clip.id == id}) else { throw SubtitleError.invalid(L("素材或插入位置无效")) }
+        let positioned=placements.map{($0.clip,$0.clip.id == id ? time : $0.start)}.sorted{$0.1<$1.1}
+        var values:[VideoClip]=[],end:Int64=0
+        for (i,entry) in positioned.enumerated() {
+            var clip=entry.0
+            let transition=i == 0 ? 0 : clip.transition
+            let gap=entry.1-end+transition
+            guard gap>=0,(clip.transition == 0 || (i>0 && gap==0)) else { throw SubtitleError.invalid(L("同轨片段不能重叠；叠化片段需先取消叠化再移动")) }
+            clip.timelineGap=gap; values.append(clip); end=entry.1+clip.duration
+        }
+        return try replacingClips(values)
+    }
+    public func insertingCopy(of id: UUID, at index: Int) throws -> Project {
+        guard !isVideoLocked else { throw SubtitleError.invalid(L("视频轨道已锁定，请先解锁")) }
+        guard var clip=allClips.first(where:{$0.id == id}), (0...clips.count).contains(index) else {
+            throw SubtitleError.invalid(L("素材或插入位置无效"))
+        }
+        clip.id=UUID(); clip.transition=0; clip.timelineGap=nil
+        var edited=clips; edited.insert(clip,at:index)
+        for i in edited.indices {
+            edited[i].transition=i == 0 ? 0 : min(edited[i].transition,min(edited[i].duration,edited[i-1].duration)/2)
+        }
+        return try replacingClips(edited)
     }
     public func trimmingClip(_ id: UUID, at time: Int64, removeBefore: Bool) throws -> Project {
         guard let p=placements.first(where:{$0.clip.id == id}),let i=clips.firstIndex(where:{$0.id == id}),time>p.start,time<p.end else {
@@ -133,7 +169,7 @@ extension Project {
         guard offset>p.clip.transition,offset<p.clip.duration-(placements.indices.contains(i+1) ? placements[i+1].clip.transition : 0) else { throw SubtitleError.invalid(L("请在片段内部、叠化区域以外分割")) }
         var a=p.clip,b=p.clip
         a.sourceEnd=a.sourceStart+offset; a.effects.fadeOut=0; a.effects.fadeIn=min(a.effects.fadeIn,a.duration)
-        b.id=UUID(); b.sourceStart=a.sourceEnd; b.transition=0; b.effects.fadeIn=0; b.effects.fadeOut=min(b.effects.fadeOut,b.duration)
+        b.id=UUID(); b.sourceStart=a.sourceEnd; b.transition=0; b.timelineGap=nil; b.effects.fadeIn=0; b.effects.fadeOut=min(b.effects.fadeOut,b.duration)
         var edited=clips; edited.replaceSubrange(i...i,with:[a,b])
         return try replacingClips(edited,origins:[b.id:a.id])
     }

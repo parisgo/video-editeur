@@ -61,8 +61,16 @@ public struct TextTrack: Codable, Equatable, Identifiable {
 }
 public struct Project: Codable, Equatable {
     public var backgroundMusic: [BackgroundMusic]?
+    public var playbackRate: Double?
+    public var speed: Double { playbackRate ?? 1 }
+    public var exportDuration: Int64 { Int64((Double(duration)/speed).rounded()) }
     public var muteVideoAudio: Bool?
+    public var lockVideoTrack: Bool?
+    public var hideVideoTrack: Bool?
+    public var isVideoLocked: Bool { lockVideoTrack ?? false }
+    public var isVideoHidden: Bool { hideVideoTrack ?? false }
     public var videoClips: [VideoClip]?
+    public var videoLayers: [VideoLayer]?
     public var textTracks: [TextTrack]?
     public var tracks: [TextTrack] { textTracks ?? [] }
     public var version = 1
@@ -112,8 +120,10 @@ public struct Project: Codable, Equatable {
         return Cue(language: language, start: start, end: end, text: trackID != nil ? "添加说明文字" : (language == .zh ? "新的中文字幕" : "Nouveau sous-titre"), trackID:trackID)
     }
     public func validate() throws {
+        guard speed.isFinite,(0.25...2).contains(speed) else { throw SubtitleError.invalid(L("播放速度必须在 0.25 到 2 倍之间")) }
         try validateMusic()
         try validateClips()
+        try validateLayers()
         guard version == 1 else { throw SubtitleError.invalid(L("不支持的工程版本：{0}", [String(describing: version)])) }
         guard duration >= 0, Set(cues.map(\.id)).count == cues.count else { throw SubtitleError.invalid(L("工程时间或字幕 ID 无效")) }
         guard Set(tracks.map(\.id)).count == tracks.count,

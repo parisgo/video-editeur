@@ -9,10 +9,14 @@ extension EditorController {
         guard !busy else { return }
         let panel=NSOpenPanel(); panel.allowedContentTypes=[.movie,.audio]; panel.allowsMultipleSelection=true; panel.title=L("添加素材（视频或音乐）")
         guard panel.runModal() == .OK else { return }
+        _ = appendMedia(panel.urls)
+    }
+    @discardableResult func appendMedia(_ urls: [URL]) -> Bool {
+        guard !busy,!urls.isEmpty else { return false }
         pauseForEditing()
         do {
             var videos:[VideoClip]=[],sounds:[BackgroundMusic]=[]
-            for url in panel.urls {
+            for url in urls {
                 let asset=AVURLAsset(url:url)
                 if !asset.tracks(withMediaType:.video).isEmpty { videos.append(VideoClip(path:url.path,duration:try MediaProbe(url.path).duration)) }
                 else {
@@ -27,37 +31,40 @@ extension EditorController {
                 sounds[i].start=next.duration>0 ? min(current,next.duration-1) : 0
             }
             next.backgroundMusic=project.music+sounds
+            mediaSearch.stringValue=""
             commit(next,name:L("添加素材"))
             if project == next { if let id=sounds.last?.id { selectMusicClip(id) } else if let id=videos.first?.id { selectVideoClip(id) } }
-        } catch { showError(error) }
+            return project == next
+        } catch { showError(error); return false }
     }
-    func selectVideoClip(_ id: UUID) {
-        guard let placement=project.placements.first(where:{$0.clip.id == id}) else { return }
+    func selectVideoClip(_ id: UUID,seek shouldSeek: Bool=true) {
+        guard let placement=project.renderPlacements.first(where:{$0.clip.id == id}) else { return }
         cancelRegionErase(); pauseForEditing(); clearSelection(); selectedClip=id; timeline.selectedClip=id; timeline.needsDisplay=true
         if showsMedia,let i=libraryEntries.firstIndex(where:{$0.clipID == id}) { setTableSelection(IndexSet(integer:i)) }
-        current=placement.start; player.seek(to:CMTime(value:current,timescale:1000),toleranceBefore:.zero,toleranceAfter:.zero); refreshPlayback()
+        if shouldSeek { current=placement.start; player.seek(to:CMTime(value:current,timescale:1000),toleranceBefore:.zero,toleranceAfter:.zero) }; refreshPlayback()
         if let info=try? MediaProbe(placement.clip.path) { statusLabel.stringValue=info.description+L(" · 双击视频片段编辑") }
     }
     func installPreview(for next: Project) throws {
-        guard !next.clips.isEmpty else { player.pause(); player.replaceCurrentItem(with:nil); current=0; loadTimelineThumbnails(for:[]); return }
+        guard !next.allClips.isEmpty else { player.pause(); player.replaceCurrentItem(with:nil); current=0; loadTimelineThumbnails(for:[]); return }
         let formats=try MediaProbe.formats(next).0
         let edited=try EditedAsset(project:next,color:formats.last ?? .sdr,subtitles:false)
         player.pause(); playButton.image=NSImage(systemSymbolName:"play.fill",accessibilityDescription:L("播放"))
         player.replaceCurrentItem(with:edited.playerItem()); overlay.videoSize=edited.size
         current=min(current,max(0,next.duration-1)); player.seek(to:CMTime(value:current,timescale:1000))
-        loadTimelineThumbnails(for:next.clips)
+        loadTimelineThumbnails(for:next.allClips)
     }
 
     func restoreEditedProject() {
         do {
             var next=project; next.videoClips=project.clips
-            for clip in next.clips where !FileManager.default.fileExists(atPath:clip.path) {
+            for clip in next.allClips where !FileManager.default.fileExists(atPath:clip.path) {
                 let alert=NSAlert(); alert.messageText=L("找不到视频素材"); alert.informativeText=clip.path; alert.addButton(withTitle:L("重新定位")); alert.addButton(withTitle:L("稍后"))
                 guard alert.runModal() == .alertFirstButtonReturn else { refresh(); return }
                 let panel=NSOpenPanel(); panel.allowedContentTypes=[.movie]
                 guard panel.runModal() == .OK,let url=panel.url else { return }
                 let probe=try MediaProbe(url.path)
                 guard abs(probe.duration-clip.sourceDuration)<=1000 else { throw SubtitleError.invalid(L("素材时长不匹配，请选择原视频")) }
+                for i in next.videoLayers?.indices ?? 0..<0 where next.videoLayers![i].clip.path == clip.path { next.videoLayers![i].clip.path=url.path }
                 for i in next.videoClips!.indices where next.videoClips![i].path == clip.path { next.videoClips![i].path=url.path }
             }
             for music in next.music where !FileManager.default.fileExists(atPath:music.path) {
@@ -69,19 +76,21 @@ extension EditorController {
                 guard !asset.tracks(withMediaType:.audio).isEmpty,seconds.isFinite,seconds>=Double(music.sourceEnd)/1000 else { throw SubtitleError.invalid(L("背景音乐没有可用音频")) }
                 for i in next.backgroundMusic!.indices where next.backgroundMusic![i].path == music.path { next.backgroundMusic![i].path=url.path }
             }
-            next.videoPath=next.clips.first?.path ?? ""; try installPreview(for:next); project=next; refresh(); scheduleSave()
+            next.videoPath=next.allClips.first?.path ?? ""; try installPreview(for:next); project=next; refresh(); scheduleSave()
         } catch { showError(error) }
     }
-    var targetClip: VideoClip? { project.clips.first{$0.id == selectedClip} ?? project.placements.first{$0.start<=current && current<$0.end}?.clip ?? project.clips.first }
+    var targetClip: VideoClip? { project.allClips.first{$0.id == selectedClip} ?? project.placements.first{$0.start<=current && current<$0.end}?.clip ?? project.clips.first }
     @objc func splitSelectedVideo() {
         if selectedMusic != nil { cutSelectedMusic(); return }
-        guard !busy,let clip=targetClip else { return }
+        if let layer=targetLayer,!busy { cutVideoLayer(layer); return }
+        guard !busy,!project.isVideoLocked,let clip=targetClip else { return }
         pauseForEditing()
         do { commit(try project.splittingClip(clip.id,at:current),name:L("分割视频")) } catch { showError(error) }
     }
     func trimSelectedVideo(removeBefore: Bool) {
         if selectedMusic != nil { cutSelectedMusic(removeBefore:removeBefore); return }
-        guard !busy,let clip=targetClip else { return }
+        if let layer=targetLayer,!busy { cutVideoLayer(layer,removeBefore:removeBefore); return }
+        guard !busy,!project.isVideoLocked,let clip=targetClip else { return }
         pauseForEditing()
         do {
             let next=try project.trimmingClip(clip.id,at:current,removeBefore:removeBefore)
@@ -89,10 +98,10 @@ extension EditorController {
         } catch { showError(error) }
     }
     func refreshCutButtons() {
-        let placement=targetClip.flatMap { clip in project.placements.first{$0.clip.id == clip.id} }
+        let placement=targetClip.flatMap { clip in project.renderPlacements.first{$0.clip.id == clip.id} }
         let inside: Bool
         if let id=selectedMusic { inside=project.music.first(where:{$0.id == id}).map{current>$0.start && current<min(project.duration,$0.start+$0.duration)} ?? false }
-        else { inside=placement.map{current>$0.start && current<$0.end} ?? false }
+        else { inside = (targetLayer.map{!$0.isLocked} ?? !project.isVideoLocked) && (placement.map{current>$0.start && current<$0.end} ?? false) }
         for name in ["splitVideo","trimVideoLeft","trimVideoRight"] {
             (bottom.subviews.first{$0.identifier?.rawValue == name} as? NSButton)?.isEnabled = !busy && inside
         }
@@ -100,7 +109,12 @@ extension EditorController {
     @objc func moveVideoEarlier() { moveVideo(-1) }
     @objc func moveVideoLater() { moveVideo(1) }
     func moveVideo(_ offset: Int) {
-        guard !busy,let clip=targetClip,let i=project.clips.firstIndex(where:{$0.id == clip.id}) else { return }
+        if let layer=targetLayer,!busy,let i=project.layerTracks.firstIndex(where:{$0[0].trackIdentifier == layer.trackIdentifier}) {
+            var tracks=project.layerTracks; let j=i+offset
+            guard !layer.isLocked,tracks.indices.contains(j),!tracks[j][0].isLocked else { return }; tracks.swapAt(i,j)
+            do { commit(try project.replacingLayers(tracks.flatMap{$0}),name:L("调整视频顺序")) } catch { showError(error) }; return
+        }
+        guard !busy,!project.isVideoLocked,let clip=targetClip,let i=project.clips.firstIndex(where:{$0.id == clip.id}) else { return }
         var clips=project.clips; let j=i+offset; guard clips.indices.contains(j) else { return }
         clips.swapAt(i,j); normalizeTransitions(&clips)
         do { commit(try project.replacingClips(clips),name:L("调整视频顺序")); selectVideoClip(clip.id) } catch { showError(error) }
@@ -110,13 +124,18 @@ extension EditorController {
     }
     @objc func deleteSelectedVideo() {
         if selectedMusic != nil { deleteMusic(); return }
-        guard !busy,let clip=targetClip else { return }
+        if let layer=targetLayer,!busy {
+            guard !layer.isLocked else { return }
+            do { commit(try project.replacingLayers(project.layers.filter{$0.id != layer.id}),name:L("删除视频片段")); clearSelection() } catch { showError(error) }; return
+        }
+        guard !busy,!project.isVideoLocked,let clip=targetClip else { return }
         var clips=project.clips.filter{$0.id != clip.id}; normalizeTransitions(&clips)
         do { commit(try project.replacingClips(clips),name:L("删除视频片段")); selectedClip=nil; timeline.selectedClip=nil } catch { showError(error) }
     }
     @objc func editSelectedVideo() {
         if selectedMusic != nil { editMusic(); return }
-        guard !busy,let original=targetClip else { return }
+        if let layer=targetLayer,!busy { editVideoLayer(layer); return }
+        guard !busy,!project.isVideoLocked,let original=targetClip else { return }
         pauseForEditing(); selectedClip=original.id; timeline.selectedClip=original.id; timeline.needsDisplay=true
         let alert=NSAlert(); alert.messageText=L("视频剪辑与特效")
         let info=(try? MediaProbe(original.path).description) ?? L("素材不可用")
@@ -158,6 +177,7 @@ extension EditorController {
         if FileManager.default.fileExists(atPath:destination.path) { return destination }
         DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue=L("正在混合剪辑音频…") }
         var speech=project; speech.backgroundMusic=nil; speech.muteVideoAudio=false
+        for i in speech.videoLayers?.indices ?? 0..<0 { speech.videoLayers![i].muted=false }
         let edited=try EditedAsset(project:speech,color:.sdr,subtitles:false)
         guard !edited.asset.tracks(withMediaType:.audio).isEmpty else { throw SubtitleError.invalid(L("时间轴没有音轨，无法生成语音字幕")) }
         guard let session=AVAssetExportSession(asset:edited.asset,presetName:AVAssetExportPresetAppleM4A) else { throw SubtitleError.invalid(L("无法创建剪辑音频")) }

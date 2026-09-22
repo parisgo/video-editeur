@@ -5,16 +5,24 @@ import SubtitleCore
 
 extension EditorController {
     func setupMusicControls() {
-        muteVideoButton.target=self; muteVideoButton.action=#selector(toggleVideoAudio); bottom.addSubview(muteVideoButton)
+        timeline.toggleVideoTrackControl={[weak self] index in
+            guard let self,!self.busy,!self.project.clips.isEmpty else { return }
+            self.pauseForEditing()
+            var next=self.project
+            let name: String
+            switch index {
+            case 0: next.lockVideoTrack = !next.isVideoLocked; name=L("锁定视频轨道")
+            case 1: next.hideVideoTrack = !next.isVideoHidden; name=L("隐藏视频轨道")
+            default: next.muteVideoAudio = !next.isVideoMuted; name=L("静音原视频")
+            }
+            self.commit(next,name:name)
+        }
         timeline.selectMusic={[weak self] id in self?.selectMusicClip(id) }
         timeline.editMusic={[weak self] in self?.editMusic()}
         timeline.moveMusic={[weak self] value in
             guard let self,let index=self.project.music.firstIndex(where:{$0.id == value.id}) else { return }
             var next=self.project; next.backgroundMusic=self.project.music; next.backgroundMusic?[index]=value; self.commit(next,name:L("编辑音乐"))
         }
-    }
-    func layoutMusicControls() {
-        muteVideoButton.frame=NSRect(x:90,y:bottom.bounds.height-70,width:200,height:28)
     }
     func selectMusicClip(_ id: UUID) {
         guard project.music.contains(where:{$0.id == id}) else { return }
@@ -30,10 +38,6 @@ extension EditorController {
     func refreshMusicControls() {
         if !project.music.contains(where:{$0.id == selectedMusic}) { selectedMusic=nil }
         timeline.selectedMusic=selectedMusic
-        muteVideoButton.state=project.isVideoMuted ? .on : .off; muteVideoButton.isEnabled = !busy && project.duration>0
-    }
-    @objc func toggleVideoAudio() {
-        guard !busy else { return }; var next=project; next.muteVideoAudio=muteVideoButton.state == .on; commit(next,name:L("静音原视频")); refreshMusicControls()
     }
     func deleteMusic() {
         guard !busy,let id=selectedMusic else { return }

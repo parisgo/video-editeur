@@ -8,6 +8,7 @@
 
 - `Sources/SubtitleCore/Project.swift`：工程、字幕、样式、SRT 与翻译校验。
 - `Sources/SubtitleCore/VideoEditing.swift`：视频片段、裁剪、分割、排序、特效及字幕时间重映射。
+- `Sources/SubtitleCore/VideoLayers.swift`：附加视频轨道、同轨片段分组、分割、层级及工程时长；`Sources/VideoEditeur/VideoLayerEditor.swift`：多轨道编辑。
 - `Sources/SubtitleCore/BackgroundMusic.swift`：音乐范围、时间轴长度及音乐剪切。
 - `Sources/SubtitleCore/Geometry.swift`：字幕坐标计算。
 - `Sources/SubtitleCore/Localization.swift`：中英界面文案与 `L(...)`。
@@ -62,3 +63,7 @@ open dist/VideoEditeur.app
 - 仅文档修改检查内容、路径、命令和差异，无需重新构建应用。
 - 行为改变同步更新 README.md；在 VALIDATION.md 记录实际执行的验证及限制。交付说明改动、验证与尚未完成项，不将历史结果当成本次验证。
 - `dist` 由脚本生成，不手改包内文件；不要在无关改动中替换构建产物。安装到桌面或其他目录时遵循本次任务授权，不关闭用户应用或覆盖正在编辑的工程来做无关验证。
+
+- 附加视频轨道通过可选 `trackID` 分组，缺省以片段 ID 作为独立轨道，兼容旧工程。分割保留 trackID，同轨片段不可重叠；锁定/隐藏/静音在组内一致。普通视频按全画布适配并覆盖下方，旧 PiP 几何字段只保留文件兼容性，不再渲染。
+
+- 主视频片段可用兼容可选 `timelineGap` 保存前置空档，旧工程默认零。拖动主体按绝对时间移动，保持其他片段/音乐位置并重映射关联字幕；分割的第二段和素材副本必须清除继承的 gap，避免重复空档。

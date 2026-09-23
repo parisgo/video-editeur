@@ -240,6 +240,8 @@ final class PreviewOverlay: NSView {
 
 }
 final class TimelineView: NSView {
+    var subtitleTracksRequested = false
+    var subtitleRowCount: Int { subtitleTracksRequested || project.cues.contains(where: { $0.trackID == nil }) ? 2 : 0 }
     var transferVideoClip: ((UUID,VideoTrackDestination,Int64)->Void)?
     private var bodyDrag: (id:UUID,origin:CGFloat,originY:CGFloat,start:Int64,base:Project)?
     private var pendingTransfer: (VideoTrackDestination,Int64)?
@@ -394,7 +396,7 @@ final class TimelineView: NSView {
     override var isFlipped: Bool { true }
     func x(_ ms: Int64) -> CGFloat { leading+CGFloat(ms)/1000*pointsPerSecond }
     func ms(_ x: CGFloat) -> Int64 { max(0,min(project.duration,Int64(max(0,x-leading)/pointsPerSecond*1000))) }
-    var layerY: CGFloat { 139+CGFloat(project.tracks.count)*44 }
+    var layerY: CGFloat { 51+CGFloat(subtitleRowCount+project.tracks.count)*44 }
     var videoY: CGFloat { layerY+CGFloat(project.layerTracks.count)*(videoHeight+11) }
     func videoRowY(_ id: UUID) -> CGFloat { project.layerTracks.firstIndex(where:{$0.contains(where:{$0.id == id})}).map{layerY+CGFloat($0)*(videoHeight+11)} ?? videoY }
     func trackID(at y: CGFloat) -> UUID? {
@@ -403,7 +405,7 @@ final class TimelineView: NSView {
     var newLayerY: CGFloat { videoY+videoHeight+11+CGFloat(project.music.count)*44 }
     var contentHeight: CGFloat { newLayerY+60 }
     func rect(_ cue: Cue) -> CGRect {
-        let row=cue.trackID.flatMap { id in project.tracks.firstIndex(where:{$0.id == id}) }.map{$0+2} ?? (cue.language == .fr ? 0 : 1)
+        let row=cue.trackID.flatMap { id in project.tracks.firstIndex(where:{$0.id == id}) }.map{$0+subtitleRowCount} ?? (cue.language == .fr ? 0 : 1)
         return CGRect(x:x(cue.start),y:47+CGFloat(row)*44,width:max(2,x(cue.end)-x(cue.start)),height:32)
     }
     private func edgeHandle(_ cue: Cue, left: Bool) -> CGRect {
@@ -433,8 +435,11 @@ final class TimelineView: NSView {
             let px=x(Int64(sec)*1000); NSColor(white:0.23,alpha:1).setFill(); CGRect(x:px,y:28,width:1,height:bounds.height-28).fill()
             text(String(format:"%02d:%02d",sec/60,sec%60),CGRect(x:px+4,y:8,width:55,height:16))
         } }
-        for (title,y) in [(L("FR · 法语"),55.0),(L("ZH · 中文"),99.0),(L("视频")+" 1",Double(videoY+14))] { text(title,CGRect(x:10,y:y,width:70,height:20)) }
-        for (i,track) in project.tracks.enumerated() { text(track.name,CGRect(x:10,y:143+CGFloat(i)*44,width:70,height:20),accent) }
+        if subtitleRowCount > 0 {
+            for (title,y) in [(L("FR · 法语"),55.0),(L("ZH · 中文"),99.0)] { text(title,CGRect(x:10,y:y,width:70,height:20)) }
+        }
+        text(L("视频")+" 1",CGRect(x:10,y:videoY+14,width:70,height:20))
+        for (i,track) in project.tracks.enumerated() { text(track.name,CGRect(x:10,y:55+CGFloat(subtitleRowCount+i)*44,width:70,height:20),accent) }
         for cue in project.cues where project.visible(cue) && rect(cue).intersects(dirtyRect) {
             let r=rect(cue); let visible=project.visible(cue)
             (cue.trackID != nil ? NSColor.systemTeal : cue.language == .fr ? NSColor(srgbRed:0.35,green:0.31,blue:0.61,alpha:visible ? 1:0.35) : NSColor(srgbRed:0.65,green:0.36,blue:0.24,alpha:visible ? 1:0.35)).setFill()

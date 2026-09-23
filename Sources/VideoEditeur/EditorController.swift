@@ -754,6 +754,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         guard seconds.isFinite,seconds>0,seconds<1e9 else { showError(SubtitleError.invalid(L("视频时长无效"))); return }
         if !preservingProject {
             archiveCurrentProject()
+            timeline.subtitleTracksRequested=false
             project=Project(); project.duration=Int64(seconds*1000); project.videoPath=url.path; projectURL=nil; UserDefaults.standard.removeObject(forKey:"projectURL"); selected=nil; history.removeAllActions(); retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成法中字幕")
         } else {
             guard abs(Int64(seconds*1000)-project.duration) <= 1000 else { showError(SubtitleError.invalid(L("所选视频时长与工程不一致，请选择原视频"))); return }
@@ -814,6 +815,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         thumbnailJob?.cancel(); thumbnailJob=nil
         player.pause(); player.replaceCurrentItem(with:nil)
         cancelRegionErase()
+        timeline.subtitleTracksRequested=false
         project=blank; projectURL=nil; selectedMusic=nil; timeline.selectedMusic=nil; selected=nil; selectedClip=nil; current=0
         deselectedCueIDs=nil; styleDragOriginal=nil; retryDirectory=nil
         UserDefaults.standard.removeObject(forKey:"projectURL")
@@ -838,7 +840,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     }
     func openProject(_ url: URL) {
         guard !busy else { return }
-        do { let loaded=try Project.read(url); archiveCurrentProject(); project=loaded; projectURL=url; UserDefaults.standard.set(url.path,forKey:"projectURL"); UserDefaults.standard.removeObject(forKey:"pendingJob"); selected=nil; retryDirectory=nil; history.removeAllActions(); attachProjectVideo() } catch { showError(error) }
+        do { let loaded=try Project.read(url); archiveCurrentProject(); timeline.subtitleTracksRequested=false; project=loaded; projectURL=url; UserDefaults.standard.set(url.path,forKey:"projectURL"); UserDefaults.standard.removeObject(forKey:"pendingJob"); selected=nil; retryDirectory=nil; history.removeAllActions(); attachProjectVideo() } catch { showError(error) }
     }
     func restore() {
         let url=supportDirectory.appendingPathComponent("Recovery.frzh")
@@ -863,6 +865,8 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     }
     func generate() {
         guard !busy,!project.videoPath.isEmpty else { return }
+        timeline.subtitleTracksRequested=true
+        refresh()
         if retryDirectory == nil && !project.cues.isEmpty {
             let alert=NSAlert(); alert.messageText=L("重新生成将替换现有字幕"); alert.informativeText=L("人工修改的字幕将被替换，完成后可通过撤销恢复。"); alert.addButton(withTitle:L("重新生成")); alert.addButton(withTitle:L("取消"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }

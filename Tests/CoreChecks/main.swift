@@ -7,6 +7,15 @@ func check(_ name: String,_ body: () throws -> Bool) {
     catch { failures+=1; print("FAIL \(name): \(error)") }
 }
 func rejects(_ body: () throws -> Void) -> Bool { do { try body(); return false } catch { return true } }
+check("New subtitle defaults and saved styles remain independent") {
+    var q=Project()
+    guard q.frenchStyle.size == 70, q.chineseStyle.size == 60,
+          q.frenchStyle.width == 0.98, q.chineseStyle.width == 0.98 else { return false }
+    q.frenchStyle.size=60; q.chineseStyle.size=54
+    q.frenchStyle.width=nil; q.chineseStyle.width=0.75
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
+    return restored == q
+}
 let fr="1\r\n00:00:00,000 --> 00:00:01,500\r\nBonjour\r\n\r\n2\r\n00:00:01,500 --> 00:00:03,000\r\nUne histoire\r\n"
 let cues=try SRT.parse(fr,language:.fr)
 check("SRT CRLF and touching boundaries") { cues.count == 2 && cues[1].start == 1500 }

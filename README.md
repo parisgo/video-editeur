@@ -27,7 +27,7 @@ The icon source is `Assets/Brand/video-editeur-logo-v1.png`. The packaging scrip
 ## Basic workflow
 
 1. **Import Video**, or drag an MP4/MOV into the preview. This starts a new project. To append video or music to the current project, use **Media → Add Media** or the corresponding command in the video editing menu (`⌘I`). Multiple files can be selected.
-2. Generate French–Chinese subtitles. The app extracts audio, transcribes French using the installed skill's Whisper script, and translates through your signed-in Codex session. The status bar shows progress; generation can be cancelled.
+2. FR/ZH timeline rows are hidden in a new project until you click **Generate FR/ZH**; projects with existing subtitles show them automatically. Generate French–Chinese subtitles. The app extracts audio, transcribes French using the installed skill's Whisper script, and translates through your signed-in Codex session. The status bar shows progress; generation can be cancelled.
 3. Switch between **Media** and **Subtitles** in the left panel. Media lists video and music; Subtitles lists language and text tracks with cue counts, rather than every subtitle line. Selecting a track selects its current or first cue. Select individual cues in the timeline or preview, then edit text, start/end times, font, size, color, outline, background, and position in the right panel. Press Return to commit numeric values.
 4. Drag subtitle clips to move them in time, or drag their edges to change duration. Cues on the same language track cannot overlap. In the preview, drag text to move it, corner handles to resize the font, and side handles to adjust text-box width and wrapping without changing font size. Properties update during dragging; one undo restores the entire drag. Use the timeline slider to zoom.
 5. Select a subtitle track and click **Add** to insert a cue of up to two seconds at the playhead. Use the trash button to delete the selected cue. Undo and redo are available with `⌘Z` and `⇧⌘Z`.
@@ -35,7 +35,7 @@ The icon source is `Assets/Brand/video-editeur-logo-v1.png`. The packaging scrip
 7. **Save** creates a `.frzh` project; reopen it with `⇧⌘O`. Autosave preserves the project for recovery. Missing video or music files can be relocated.
 8. **Export Video** creates an MP4 with visible subtitles, text, and styles burned in. Editing is disabled during export. The destination is replaced only after success; cancellation preserves an existing destination file.
 
-Default French subtitles use Avenir Next Condensed at size 60, with white text and a black outline above the Chinese line. Chinese uses Arial at size 54, with black text on yellow. Existing projects retain their saved styles. Font sizes are relative to a 1080-pixel frame height. Positions are relative to the visible video area, with Y increasing from bottom to top. Preview and export share text layout and rendering code.
+Default French subtitles use Avenir Next Condensed at size 70, with white text and a black outline above the Chinese line. Chinese uses Arial at size 60, with black text on yellow. Both subtitle languages default to 98% text-box width. Existing projects retain their saved styles. Font sizes are relative to a 1080-pixel frame height. Positions are relative to the visible video area, with Y increasing from bottom to top. Preview and export share text layout and rendering code.
 
 ## Editing text and the workspace
 

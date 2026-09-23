@@ -344,3 +344,12 @@ Release 构建通过，65/65 核心检查通过；包含译文占位符一致性
 - `./scripts/build-app.sh`：最终 Release 构建、打包、签名通过。
 - `./scripts/check-multitrack.sh`：中英文均通过。新增 AppKit 合成鼠标操作覆盖主轨道→已有轨道→新轨道→主轨道、单次完成回调与 Esc 取消；既有多轨合成/导出、分割、静音、隐藏、5 秒主轨道开始检查继续通过。产物：`/tmp/video-editeur-multitrack.Fn1wkv`。
 - `git diff --check`：通过。未操作用户工程，未做真实鼠标端到端检查；本次没有修改合成器色彩路径，未重复 HDR 检查。
+
+## 2026-09-23 · 字幕轨道初始隐藏与默认样式
+
+- 新工程 FR/ZH 行默认隐藏且不占用高度，点击生成后展开；已有语言字幕自动显示。文字轨道、视频轨道和鼠标命中位置随布局调整。
+- 新工程 FR 字号 70、ZH 字号 60，两种字幕默认宽度 98%；已保存样式和缺失 width 的旧工程保持不变。
+- `./scripts/check.sh`：89 passed, 0 failed，包含新默认值和保存样式往返检查。
+- `./scripts/build-app.sh`：Release 构建、打包及 ad-hoc 签名成功。
+- `./scripts/check-multitrack.sh`：中英文均通过；增加隐藏/展开行、文字轨道偏移及已有字幕显示断言，原多轨拖动、取消、控制按钮和预览/导出检查通过。产物 `/tmp/video-editeur-multitrack.KDl8oV`，检查了两种语言的时间轴截图。
+- 检查使用独立 AppKit 测试窗口和模拟事件，未操作用户正在编辑的工程，未运行真实转写/翻译任务。

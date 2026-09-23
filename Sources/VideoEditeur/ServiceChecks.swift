@@ -176,6 +176,16 @@ func runMultiTrackChecks(directory: URL) throws {
     images.requestedTimeToleranceBefore = .zero; images.requestedTimeToleranceAfter = .zero
     try requireBlue(images.copyCGImage(at:CMTime(value:2000,timescale:1000),actualTime:nil))
     guard abs(CMTimeGetSeconds(output.duration)-2.5)<0.1 else { throw SubtitleError.invalid("Multitrack output duration failed") }
+    let emptyTimeline=TimelineView(frame:NSRect(x:0,y:0,width:900,height:400))
+    guard emptyTimeline.subtitleRowCount == 0, emptyTimeline.layerY == 51 else { throw SubtitleError.invalid("Empty subtitle rows should be hidden") }
+    emptyTimeline.project.textTracks=[TextTrack(name:"Title")]
+    let textCue=Cue(language:.fr,start:0,end:1000,text:"Title",trackID:emptyTimeline.project.tracks[0].id)
+    guard emptyTimeline.rect(textCue).minY == 47 else { throw SubtitleError.invalid("Hidden subtitle rows left a gap") }
+    emptyTimeline.subtitleTracksRequested=true
+    guard emptyTimeline.subtitleRowCount == 2, emptyTimeline.rect(textCue).minY == 135 else { throw SubtitleError.invalid("Generate must reveal subtitle rows") }
+    emptyTimeline.subtitleTracksRequested=false
+    emptyTimeline.project.cues=[Cue(language:.zh,start:0,end:1000,text:"字幕")]
+    guard emptyTimeline.subtitleRowCount == 2 else { throw SubtitleError.invalid("Existing subtitles must remain visible") }
     let timeline=TimelineView(frame:NSRect(x:0,y:0,width:900,height:400)); timeline.project=p; timeline.pointsPerSecond=180
     let window=NSWindow(contentRect:timeline.bounds,styleMask:[.titled],backing:.buffered,defer:false)
     window.contentView=timeline; timeline.layoutSubtreeIfNeeded()

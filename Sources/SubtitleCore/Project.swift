@@ -34,7 +34,8 @@ public struct SubtitleStyle: Codable, Equatable {
     public static func standard(_ language: Language) -> Self {
         var s = Self()
         s.font = language == .fr ? "AvenirNextCondensed-Regular" : "ArialMT"
-        s.size = language == .fr ? 60 : 54
+        s.size = language == .fr ? 70 : 60
+        s.width = 0.98
         if language == .zh { s.color = .black; s.background = RGBA(1,0.87,0.05); s.outlineWidth = 0; s.y = 0.075 }
         return s
     }

@@ -292,7 +292,8 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
             return nil
         }
         NSColorPanel.shared.showsAlpha=true
-        refresh(); refreshInspector(); restore()
+        // Every launch starts with the fresh Project initialized by this controller.
+        refresh(); refreshInspector()
     }
     @objc func panelsChanged(_ sender: NSSegmentedControl) {
         // Commit any field being edited before its panel is hidden.
@@ -777,16 +778,38 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         autosave?.cancel(); let task=DispatchWorkItem { [weak self] in self?.persistNow() }; autosave=task; DispatchQueue.main.asyncAfter(deadline:.now()+0.6,execute:task)
     }
     func persistNow() {
-        guard !project.videoPath.isEmpty || project.videoClips != nil else { return }
+        guard hasProjectContent || projectURL != nil else { return }
         do {
             try project.write(supportDirectory.appendingPathComponent("Recovery.frzh"))
-            if let url=projectURL { try project.write(url) }
         } catch { statusLabel.stringValue=L("自动保存失败：{0}", [String(describing: error.localizedDescription)]) }
+    }
+    var hasProjectContent: Bool {
+        !project.videoPath.isEmpty || !project.allClips.isEmpty || !project.cues.isEmpty || !project.music.isEmpty || !project.tracks.isEmpty
+    }
+    var needsSaveBeforeClosing: Bool {
+        guard let url=projectURL else { return hasProjectContent }
+        return (try? Project.read(url)) != project
+    }
+    func confirmSaveBeforeClosing() -> Bool {
+        view.window?.makeFirstResponder(nil)
+        pauseForEditing()
+        guard needsSaveBeforeClosing else { return true }
+        let alert=NSAlert()
+        alert.messageText=L("退出前保存工程？")
+        alert.informativeText=L("工程有未保存的修改。选择不保存将保留上次保存的工程版本。")
+        alert.addButton(withTitle:L("保存"))
+        alert.addButton(withTitle:L("不保存"))
+        alert.addButton(withTitle:L("取消"))
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return saveProjectToDisk()
+        case .alertSecondButtonReturn: return true
+        default: return false
+        }
     }
     @objc func saveProject() { _ = saveProjectToDisk() }
     func saveProjectToDisk() -> Bool {
-        guard !project.videoPath.isEmpty || project.videoClips != nil else { return false }
-        let panel=NSSavePanel(); panel.nameFieldStringValue=URL(fileURLWithPath:project.videoPath).deletingPathExtension().lastPathComponent+".frzh"
+        guard hasProjectContent || projectURL != nil else { return false }
+        let panel=NSSavePanel(); panel.nameFieldStringValue=projectURL?.lastPathComponent ?? (project.videoPath.isEmpty ? "Project.frzh" : URL(fileURLWithPath:project.videoPath).deletingPathExtension().lastPathComponent+".frzh")
         panel.title=L("保存字幕工程"); panel.allowedContentTypes=[UTType(exportedAs:"local.videoediteur.project",conformingTo:.json)]
         if panel.runModal() == .OK,let url=panel.url { do { try project.write(url); projectURL=url; UserDefaults.standard.set(url.path,forKey:"projectURL"); statusLabel.stringValue=L("工程已保存：{0}", [String(describing: url.lastPathComponent)]); return true } catch { showError(error) } }
         return false
@@ -841,13 +864,6 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     func openProject(_ url: URL) {
         guard !busy else { return }
         do { let loaded=try Project.read(url); archiveCurrentProject(); timeline.subtitleTracksRequested=false; project=loaded; projectURL=url; UserDefaults.standard.set(url.path,forKey:"projectURL"); UserDefaults.standard.removeObject(forKey:"pendingJob"); selected=nil; retryDirectory=nil; history.removeAllActions(); attachProjectVideo() } catch { showError(error) }
-    }
-    func restore() {
-        let url=supportDirectory.appendingPathComponent("Recovery.frzh")
-        if let p=try? Project.read(url),!p.videoPath.isEmpty || !p.music.isEmpty { project=p
-            if let path=UserDefaults.standard.string(forKey:"projectURL") { projectURL=URL(fileURLWithPath:path) }
-            if let path=UserDefaults.standard.string(forKey:"pendingJob"),FileManager.default.fileExists(atPath:path) { retryDirectory=URL(fileURLWithPath:path); generateButton.title=L("继续字幕生成") }
-            DispatchQueue.main.async { [weak self] in self?.attachProjectVideo() } }
     }
     func attachProjectVideo() {
         if project.videoClips != nil || !project.music.isEmpty || project.isVideoMuted || project.isVideoHidden { restoreEditedProject(); return }

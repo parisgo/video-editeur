@@ -2,13 +2,14 @@ import AppKit
 import AVFoundation
 import SubtitleCore
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var window: NSWindow!
     var pendingURL: URL?
     let editor=EditorController()
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance=NSAppearance(named:.darkAqua)
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1440,height:900),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
+        window.delegate=self
         window.title=L("字幕工坊 · Video Éditeur"); window.minSize=NSSize(width:1140,height:760); window.contentViewController=editor; window.center(); window.makeKeyAndOrderFront(nil)
         let main=NSMenu()
         func menu(_ title: String) -> NSMenu { let item=NSMenuItem(); item.title=title; let submenu=NSMenu(title:title); item.submenu=submenu; main.addItem(item); return submenu }
@@ -46,19 +47,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url=urls.first else { return }; if window != nil { editor.openProject(url) } else { pendingURL=url }
     }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        NSApp.terminate(sender)
+        return false
+    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if editor.busy {
             let alert=NSAlert(); alert.messageText=L("任务正在进行"); alert.informativeText=L("退出会取消当前任务，已完成字幕仍会保存。"); alert.addButton(withTitle:L("取消任务并退出")); alert.addButton(withTitle:L("继续工作"))
             if alert.runModal() != .alertFirstButtonReturn { return .terminateCancel }
-            editor.generation?.cancel(); editor.exporter?.cancel()
         }
+        guard editor.confirmSaveBeforeClosing() else { return .terminateCancel }
+        editor.generation?.cancel(); editor.exporter?.cancel()
+        editor.autosave?.cancel()
         editor.persistNow(); return .terminateNow
     }
 }
 
 // CLI smoke-test hooks exercise the same renderer, exporter and generation pipeline as the app.
-if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--check-music" {
+if CommandLine.arguments.contains("--check-close") {
+    _=NSApplication.shared
+    do { try runCloseChecks(); exit(0) } catch { fputs("\(error)\n",stderr); exit(1) }
+} else if CommandLine.arguments.contains("--check-startup") {
+    _=NSApplication.shared
+    let editor=EditorController()
+    _=editor.view
+    RunLoop.current.run(until:Date().addingTimeInterval(0.2))
+    guard editor.project == Project(), editor.projectURL == nil,
+          editor.retryDirectory == nil, editor.player.currentItem == nil,
+          editor.timeline.subtitleRowCount == 0, editor.selected == nil else {
+        fputs("Startup did not create an empty project\n",stderr); exit(1)
+    }
+    print("STARTUP_OK blank project, no media, no retry, hidden subtitle rows")
+    exit(0)
+} else if CommandLine.arguments.count >= 3,CommandLine.arguments[1] == "--check-music" {
     do { try runMusicChecks(directory:URL(fileURLWithPath:CommandLine.arguments[2])); exit(0) } catch { print(error); exit(1) }
 } else if CommandLine.arguments.contains("--check-region-color") {
     do { try runRegionColorChecks(); exit(0) } catch { print(error); exit(1) }

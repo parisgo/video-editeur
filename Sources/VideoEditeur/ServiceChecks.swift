@@ -281,3 +281,28 @@ func runMultiTrackChecks(directory: URL) throws {
     }
     print("MULTITRACK_CHECKS_OK full-canvas preview/export, split row, track controls, mute, hide, timeline movement, cross-track drag, track menu and main movement to 5 seconds with leading black export")
 }
+
+// Uses temporary project files; never touches the user's recovery or saved projects.
+func runCloseChecks() throws {
+    let directory=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
+    defer { try? FileManager.default.removeItem(at:directory) }
+    let editor=EditorController(); _=editor.view
+    guard !editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("Blank project should close directly") }
+    editor.project.videoPath=directory.appendingPathComponent("source.mp4").path
+    editor.project.duration=2000
+    guard editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("New project must prompt") }
+    let url=directory.appendingPathComponent("Saved.frzh")
+    try editor.project.write(url); editor.projectURL=url
+    guard !editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("Saved project should close directly") }
+    editor.project.cues=[Cue(language:.zh,start:0,end:1000,text:"未保存")]
+    guard editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("Edited project must prompt") }
+    for (response,expected) in [(NSApplication.ModalResponse.alertThirdButtonReturn,false),(.alertSecondButtonReturn,true)] {
+        DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { NSApp.stopModal(withCode:response) }
+        guard editor.confirmSaveBeforeClosing() == expected else { throw SubtitleError.invalid("Close confirmation response failed") }
+    }
+    guard try Project.read(url).cues.isEmpty else { throw SubtitleError.invalid("Discard changed saved file") }
+    try editor.project.write(url)
+    guard !editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("Saving must clear pending changes") }
+    print("CLOSE_OK blank, new, saved, modified, cancel, discard and saved-file preservation")
+}

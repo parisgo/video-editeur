@@ -353,3 +353,25 @@ Release 构建通过，65/65 核心检查通过；包含译文占位符一致性
 - `./scripts/build-app.sh`：Release 构建、打包及 ad-hoc 签名成功。
 - `./scripts/check-multitrack.sh`：中英文均通过；增加隐藏/展开行、文字轨道偏移及已有字幕显示断言，原多轨拖动、取消、控制按钮和预览/导出检查通过。产物 `/tmp/video-editeur-multitrack.KDl8oV`，检查了两种语言的时间轴截图。
 - 检查使用独立 AppKit 测试窗口和模拟事件，未操作用户正在编辑的工程，未运行真实转写/翻译任务。
+
+## 2026-09-24 · 启动进入空白新工程
+
+- 移除启动时自动读取 Recovery.frzh、旧工程路径及 pendingJob 的逻辑。手动打开工程和文件打开事件保持可用，保留自动保存逻辑；启动不清除恢复文件或任务缓存。
+- `./scripts/build-app.sh`：Release 构建、打包及签名成功。
+- `VideoEditeur --check-startup -editor.interfaceLanguage zh/en`：两种语言均输出 STARTUP_OK。独立实例实际加载 EditorController 的视图并运行事件循环，验证空白 Project、无工程路径/任务重试/播放器素材、字幕轨道隐藏。
+- `git diff --check`：通过。未关闭用户正在运行的应用，未运行真实生成或媒体导出；未执行手工完整 UI 回归。
+
+## 2026-09-24 · 新增文字默认 Arial
+
+- TextTrack 初始化时默认使用 ArialMT；向已有轨道添加文字继续继承该轨道样式，旧工程解码不变。
+- `./scripts/check.sh`：89 passed, 0 failed。
+- `./scripts/build-app.sh`：构建、打包及签名成功；`git diff --check` 通过。
+- 本次为默认字体调整，未执行手工界面或媒体导出检查。
+
+## 2026-09-24 · 关闭前保存确认
+
+- 关闭主窗口与退出 App 共用终止流程；有未保存修改时提供保存、不保存、取消。保存失败或取消保存面板会阻止退出，空白或未修改工程直接退出。
+- 自动保存仅写恢复副本；正式工程由显式保存写入，避免选择不保存前已被自动覆盖。音乐工程也可保存。
+- `./scripts/check.sh`：89 passed, 0 failed；最终 `./scripts/build-app.sh` 构建、打包和签名成功；`git diff --check` 通过。
+- `--check-close -editor.interfaceLanguage zh/en` 均输出 CLOSE_OK。独立进程使用临时工程检查空白、新建、已保存、已修改的判断；实际创建双语确认弹窗，通过模拟模态返回检查取消/不保存，并验证正式文件未改变。
+- 未关闭用户正在编辑的应用；保存面板的用户操作、真实任务运行中退出未手工验证，保存取消/失败分支由返回值与调用路径检查。

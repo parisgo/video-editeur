@@ -57,7 +57,7 @@ public struct TextTrack: Codable, Equatable, Identifiable {
     public var name: String
     public var style: SubtitleStyle
     public init(name: String) {
-        id=UUID(); self.name=name; style=SubtitleStyle(); style.y=0.8
+        id=UUID(); self.name=name; style=SubtitleStyle(); style.font="ArialMT"; style.y=0.8
     }
 }
 public struct Project: Codable, Equatable {

@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 import SubtitleCore
 
 extension EditorController {
+    func canImportMediaFiles(_ urls: [URL]) -> Bool {
+        guard !busy,!urls.isEmpty else { return false }
+        return !project.isVideoLocked || urls.allSatisfy { url in
+            (try? url.resourceValues(forKeys:[.contentTypeKey]).contentType?.conforms(to:.audio)) == true
+        }
+    }
     @objc func libraryDoubleClicked() { if showsMedia { editSelectedVideo() } }
     @objc func appendVideos() {
         guard !busy else { return }

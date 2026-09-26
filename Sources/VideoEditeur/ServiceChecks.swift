@@ -306,3 +306,121 @@ func runCloseChecks() throws {
     guard !editor.needsSaveBeforeClosing else { throw SubtitleError.invalid("Saving must clear pending changes") }
     print("CLOSE_OK blank, new, saved, modified, cancel, discard and saved-file preservation")
 }
+
+func runCodexPathChecks() throws {
+    let dir=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+    defer { try? FileManager.default.removeItem(at:dir) }
+    let custom=dir.appendingPathComponent("custom").path, detected=dir.appendingPathComponent("codex").path
+    let plain=dir.appendingPathComponent("not-executable").path, missing=dir.appendingPathComponent("old-path").path
+    for path in [custom,detected,plain] {
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to:URL(fileURLWithPath:path))
+        try FileManager.default.setAttributes([.posixPermissions:path == plain ? 0o644 : 0o755],ofItemAtPath:path)
+    }
+    guard ToolSettings.detectCodex(configured:custom,candidates:[detected]) == custom,
+          ToolSettings.detectCodex(configured:missing,candidates:[plain,dir.path,detected]) == detected,
+          ToolSettings.detectCodex(configured:missing,candidates:[plain,dir.path]) == nil else {
+        throw SubtitleError.invalid("Codex path resolution regression")
+    }
+    try FileManager.default.removeItem(atPath:custom)
+    guard ToolSettings.detectCodex(configured:custom,candidates:[detected]) == detected else { throw SubtitleError.invalid("Relocated CLI was not detected") }
+    guard let actual=ToolSettings.detectCodex(configured:"/missing/codex") else { throw SubtitleError.invalid("No local Codex executable detected") }
+    print("CODEX_PATH_OK custom priority, missing/non-executable paths, relocated CLI; local: \(actual)")
+}
+
+func runMultilingualChecks() throws {
+    let dir=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+    defer { try? FileManager.default.removeItem(at:dir) }
+    let skill=dir.appendingPathComponent("skill")
+    try FileManager.default.createDirectory(at:skill.appendingPathComponent("scripts"),withIntermediateDirectories:true)
+    try "fixture".write(to:skill.appendingPathComponent("SKILL.md"),atomically:true,encoding:.utf8)
+    let transcribe=#"""
+    import sys
+    from pathlib import Path
+    language=sys.argv[sys.argv.index('--language')+1]
+    text='Bonjour' if language=='fr' else 'Hello'
+    Path(sys.argv[sys.argv.index('--output')+1]).write_text('1\n00:00:00,000 --> 00:00:01,000\n'+text+'\n')
+    """#
+    try transcribe.write(to:skill.appendingPathComponent("scripts/transcribe_srt.py"),atomically:true,encoding:.utf8)
+    let codex=dir.appendingPathComponent("codex")
+    let translator=#"""
+    #!/usr/bin/python3
+    import json,sys
+    from pathlib import Path
+    prompt=sys.stdin.read()
+    language=prompt.split(' into ')[1].split('.')[0]
+    data=json.loads(prompt.split('BEGIN_SUBTITLE_DATA\n')[1].split('\nEND_SUBTITLE_DATA')[0])
+    text={'zh':'你好','en':'Hello!','fr':'Bonjour !'}[language]
+    Path(sys.argv[sys.argv.index('-o')+1]).write_text(json.dumps({'translations':[{'id':x['id'],'text':text} for x in data]}))
+    """#
+    try translator.write(to:codex,atomically:true,encoding:.utf8)
+    try FileManager.default.setAttributes([.posixPermissions:0o755],ofItemAtPath:codex.path)
+    let tools=ToolSettings(ffmpeg:"/usr/bin/true",python:"/usr/bin/python3",codex:codex.path,skill:skill.path)
+    for source in [Language.fr,.en] {
+        for target in [Language.zh,.en,.fr] {
+            let languages=GenerationLanguages(source:source,target:target)
+            let folder=dir.appendingPathComponent(source.rawValue+target.rawValue)
+            let job=GenerationJob(directory:folder,tools:tools,languages:languages)
+            let cues=try job.run(video:dir.appendingPathComponent("fixture.mp4"),duration:2000,status:{_ in},partial:{_ in})
+            guard cues.count == (source == target ? 1 : 2),cues.first?.language == source,cues.last?.language == target else { throw SubtitleError.invalid("Language routing failed") }
+            let resumed=try job.run(video:dir.appendingPathComponent("fixture.mp4"),duration:2000,status:{_ in},partial:{_ in})
+            guard resumed.map(\.text) == cues.map(\.text) else { throw SubtitleError.invalid("Retry cache failed") }
+            let wrong=GenerationJob(directory:folder,tools:tools,languages:GenerationLanguages(source:source == .fr ? .en : .fr,target:target))
+            do { _ = try wrong.run(video:dir,duration:2000,status:{_ in},partial:{_ in}); throw SubtitleError.invalid("Language mismatch accepted") }
+            catch { guard error.localizedDescription.contains(L("任务语言不匹配，请重新生成")) else { throw error } }
+        }
+    }
+    let editor=EditorController(); _=editor.view
+    DispatchQueue.main.asyncAfter(deadline:.now()+0.2) {
+        if let view=NSApp.modalWindow?.contentView, let bitmap=view.bitmapImageRepForCachingDisplay(in:view.bounds) {
+            view.cacheDisplay(in:view.bounds,to:bitmap)
+            try? bitmap.representation(using:.png,properties:[:])?.write(to:URL(fileURLWithPath:"/tmp/subtitle-language-picker-\(InterfaceLanguage.current.rawValue).png"))
+        }
+        NSApp.stopModal(withCode:.alertFirstButtonReturn)
+    }
+    guard editor.chooseGenerationLanguages() == GenerationLanguages() else { throw SubtitleError.invalid("Picker defaults failed") }
+    editor.project.generationLanguages=GenerationLanguages(source:.en,target:.fr)
+    DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { NSApp.stopModal(withCode:.alertFirstButtonReturn) }
+    guard editor.chooseGenerationLanguages() == editor.project.generationLanguages else { throw SubtitleError.invalid("Picker restoration failed") }
+    DispatchQueue.main.asyncAfter(deadline:.now()+0.2) { NSApp.stopModal(withCode:.alertSecondButtonReturn) }
+    guard editor.chooseGenerationLanguages() == nil else { throw SubtitleError.invalid("Picker cancel failed") }
+    editor.refresh()
+    guard editor.displayMode.label(forSegment:0) == Language.en.title, editor.displayMode.label(forSegment:1) == Language.fr.title else { throw SubtitleError.invalid("Display language controls failed") }
+    print("MULTILINGUAL_OK six pairs, same-language transcription, cache isolation, retry, picker defaults/cancel and display labels (offline fixtures)")
+}
+
+func runTimelineFileDropChecks() throws {
+    let dir=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+    defer { try? FileManager.default.removeItem(at:dir) }
+    let video=dir.appendingPathComponent("video.mp4"),music=dir.appendingPathComponent("music.mp3"),text=dir.appendingPathComponent("notes.txt")
+    for file in [video,music,text] { try Data().write(to:file) }
+    let board=NSPasteboard.withUniqueName()
+    defer { board.releaseGlobally() }
+    func put(_ urls: [URL]) { board.clearContents(); board.writeObjects(urls.map { $0 as NSURL }) }
+    let editor=EditorController(); _=editor.view
+    let timeline=editor.timeline
+    var imported:[URL]=[]
+    timeline.dropFiles={ imported=$0; return true }
+    put([video,music])
+    guard timeline.registeredDraggedTypes.contains(.fileURL),timeline.acceptsFileDrop(board),timeline.importFileDrop(board),imported == [video,music] else { throw SubtitleError.invalid("Timeline mixed file drop routing failed") }
+    editor.languageChoice.selectedSegment=1
+    guard timeline.acceptsFileDrop(board) else { throw SubtitleError.invalid("Timeline must accept files with subtitles tab selected") }
+    editor.busy=true
+    guard !timeline.acceptsFileDrop(board),!timeline.importFileDrop(board) else { throw SubtitleError.invalid("Busy timeline accepted drop") }
+    editor.busy=false; editor.project.lockVideoTrack=true
+    guard !timeline.acceptsFileDrop(board) else { throw SubtitleError.invalid("Locked video track accepted mixed drop") }
+    put([music])
+    guard timeline.acceptsFileDrop(board),timeline.importFileDrop(board),imported == [music] else { throw SubtitleError.invalid("Locked video track rejected music") }
+    timeline.editingEnabled=false
+    guard !timeline.acceptsFileDrop(board) else { throw SubtitleError.invalid("Disabled timeline accepted drop") }
+    timeline.editingEnabled=true; editor.project.lockVideoTrack=false
+    for urls in [[text],[video,text],[dir],[dir.appendingPathComponent("missing.mp4")]] {
+        put(urls)
+        guard !timeline.acceptsFileDrop(board),!timeline.importFileDrop(board) else { throw SubtitleError.invalid("Unsupported file drop accepted") }
+    }
+    board.clearContents(); board.setString("https://example.com/video.mp4",forType:.string)
+    guard !timeline.acceptsFileDrop(board) else { throw SubtitleError.invalid("Text URL accepted as local media") }
+    print("TIMELINE_FILE_DROP_OK mixed files, audio, subtitles tab, busy/lock/disabled guards and unsupported files")
+}

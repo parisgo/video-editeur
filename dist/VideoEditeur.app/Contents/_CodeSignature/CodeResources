@@ -8,6 +8,14 @@
 		<data>
 		13XN0hd3jtIXiXkU9Wejbvh5eMk=
 		</data>
+		<key>Resources/SubtitleSkill/SKILL.md</key>
+		<data>
+		vNB4Pc7wjBdqRIUQBu2Srv/z2EE=
+		</data>
+		<key>Resources/SubtitleSkill/scripts/transcribe_srt.py</key>
+		<data>
+		PLfJVEOC9v5AGrdYTDQw/TbIWx4=
+		</data>
 	</dict>
 	<key>files2</key>
 	<dict>
@@ -16,6 +24,20 @@
 			<key>hash2</key>
 			<data>
 			1TZpR88WiDSGY8bUcVIUhe3hKrRadB6glVgAqRq36xY=
+			</data>
+		</dict>
+		<key>Resources/SubtitleSkill/SKILL.md</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			PGE3v51vliMMJKuYSA2104YV8UHBQyeiLm2xiiTFYng=
+			</data>
+		</dict>
+		<key>Resources/SubtitleSkill/scripts/transcribe_srt.py</key>
+		<dict>
+			<key>hash2</key>
+			<data>
+			q5t6ijZP5dPmqcPKNtKbiie3A4Q2yk5pxj1OEQBZHcU=
 			</data>
 		</dict>
 	</dict>

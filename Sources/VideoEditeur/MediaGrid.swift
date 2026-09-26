@@ -61,23 +61,27 @@ final class MediaCard: NSButton, NSDraggingSource {
         (filename as NSString).draw(in:CGRect(x:2,y:1,width:bounds.width-4,height:18),withAttributes:[.font:NSFont.systemFont(ofSize:11),.foregroundColor:picked ? NSColor.white : muted,.paragraphStyle:paragraph])
     }
 }
+/// Shared validation for Finder file drops in the library and timeline.
+func mediaFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    let urls=(pasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL]) ?? []
+    guard !urls.isEmpty,urls.allSatisfy({ url in
+        var isDirectory: ObjCBool=false
+        guard FileManager.default.fileExists(atPath:url.path,isDirectory:&isDirectory), !isDirectory.boolValue,
+              let type=try? url.resourceValues(forKeys:[.contentTypeKey]).contentType else { return false }
+        return type.conforms(to:.movie) || type.conforms(to:.audio)
+    }) else { return [] }
+    return urls
+}
+
 final class MediaGridView: NSView {
     var canDrop: (([URL])->Bool)?
     var dropFiles: (([URL])->Bool)?
     private var dropHighlighted=false { didSet { needsDisplay=true } }
     override init(frame: NSRect) { super.init(frame:frame); registerForDraggedTypes([.fileURL]) }
     required init?(coder: NSCoder) { super.init(coder:coder); registerForDraggedTypes([.fileURL]) }
-    private func dropURLs(_ sender: NSDraggingInfo) -> [URL] {
-        let urls=(sender.draggingPasteboard.readObjects(forClasses:[NSURL.self],options:[.urlReadingFileURLsOnly:true]) as? [URL]) ?? []
-        guard !urls.isEmpty,urls.allSatisfy({ url in
-            guard let type=try? url.resourceValues(forKeys:[.contentTypeKey]).contentType else { return false }
-            return type.conforms(to:.movie) || type.conforms(to:.audio)
-        }) else { return [] }
-        return urls
-    }
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let urls=dropURLs(sender)
+        let urls=mediaFileURLs(from:sender.draggingPasteboard)
         dropHighlighted = !urls.isEmpty && (canDrop?(urls) ?? false)
         return dropHighlighted ? .copy : []
     }
@@ -85,7 +89,7 @@ final class MediaGridView: NSView {
     override func draggingEnded(_ sender: NSDraggingInfo) { dropHighlighted=false }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         defer { dropHighlighted=false }
-        let urls=dropURLs(sender)
+        let urls=mediaFileURLs(from:sender.draggingPasteboard)
         guard !urls.isEmpty,canDrop?(urls) == true else { return false }
         return dropFiles?(urls) ?? false
     }

@@ -482,5 +482,27 @@ check("Moving one split clip to a new track preserves the original track and loc
     let q=try split.transferringClip(split.layers[0].id,to:.newTrack,at:0)
     return q.layerTracks.count==2 && q.layerTracks[0][0].id==split.layers[0].id && q.layerTracks[0][0].trackIdentifier != split.layerTracks[0][0].trackIdentifier && q.clips==split.clips
 }
+check("Multilingual project persists English style visibility and language pair") {
+    var q=Project(); q.duration=1000; q.generationLanguages=GenerationLanguages(source:.en,target:.fr)
+    q.cues=[Cue(language:.en,start:0,end:1000,text:"Hello"),Cue(language:.fr,start:0,end:1000,text:"Bonjour")]
+    var style=SubtitleStyle.standard(.en); style.size=80; q.applyStyle(style,to:.en); q.setVisible(false,for:.en)
+    let restored=try JSONDecoder().decode(Project.self,from:JSONEncoder().encode(q))
+    try restored.validate()
+    return restored == q && restored.subtitleLanguages == [.en,.fr] && restored.displayedCues.count == 1 && restored.style(for:q.cues[0]).size == 80
+}
+check("English and French translation retain punctuation timing and reject missing IDs") {
+    let source=[Cue(language:.fr,start:100,end:900,text:"Bonjour")]
+    let en=try Translator.merge([Translation(id:source[0].id,text:"Hello,\nworld!")],source:source,target:.en)
+    let fr=try Translator.merge([Translation(id:source[0].id,text:"C’est vrai !")],source:source,target:.fr)
+    return en[0].text == "Hello, world!" && en[0].language == .en && en[0].start == 100 && fr[0].language == .fr && rejects { _ = try Translator.merge([],source:source,target:.en) }
+}
+check("Legacy project and same-language generation keep compatible track counts") {
+    var q=Project(); q.generationLanguages=GenerationLanguages(source:.en,target:.en)
+    guard q.subtitleLanguages == [.en] else { return false }
+    var json=try JSONSerialization.jsonObject(with:JSONEncoder().encode(q)) as! [String:Any]
+    json.removeValue(forKey:"generationLanguages"); json.removeValue(forKey:"englishStyle"); json.removeValue(forKey:"showEnglish")
+    let old=try JSONDecoder().decode(Project.self,from:JSONSerialization.data(withJSONObject:json))
+    return old.subtitleLanguages == [.fr,.zh] && old.visible(.en)
+}
 print("\(passed) passed, \(failures) failed")
 exit(failures == 0 ? 0:1)

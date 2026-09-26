@@ -375,3 +375,29 @@ Release 构建通过，65/65 核心检查通过；包含译文占位符一致性
 - `./scripts/check.sh`：89 passed, 0 failed；最终 `./scripts/build-app.sh` 构建、打包和签名成功；`git diff --check` 通过。
 - `--check-close -editor.interfaceLanguage zh/en` 均输出 CLOSE_OK。独立进程使用临时工程检查空白、新建、已保存、已修改的判断；实际创建双语确认弹窗，通过模拟模态返回检查取消/不保存，并验证正式文件未改变。
 - 未关闭用户正在编辑的应用；保存面板的用户操作、真实任务运行中退出未手工验证，保存取消/失败分支由返回值与调用路径检查。
+
+## 2026-09-26 · Codex 路径自动检测
+
+- 读取工具设置时保留有效的自定义路径；无效时依次检测系统/用户 Applications 中 ChatGPT 和 Codex 的已知新旧布局、PATH 及常见 CLI 安装位置。设置面板与生成任务共用解析后的路径，未找到时保留原错误提示。
+- `./scripts/build-app.sh`：构建、打包、签名成功；`./scripts/check.sh`：89 passed, 0 failed；`git diff --check` 通过。
+- `--check-codex-path` 输出 CODEX_PATH_OK：临时文件检查自定义优先、失效路径、非可执行文件、目录排除、程序迁移及全部缺失；本机成功检测到 ChatGPT 内的新 CodexCLI 路径。
+- 未修改用户工具配置或登录信息，未运行真实字幕生成或在线翻译；未进行手工设置面板操作。
+
+## 2026-09-26 · 多语言字幕生成与新 skill
+
+- 按钮改为「生成字幕」，点击弹出视频语言 fr/en 和目标语言 zh/en/fr；新工程默认 fr→zh，同语言仅转写。所选组合随工程保存，时间轴行、素材字幕列表、预览语言开关、英语样式/可见性同步适配；可选字段兼容旧工程。
+- 任务记录 languages.json，语言变化创建独立缓存；保留结构化 ID 校验，中文规则不套用于英语/法语，取消与部分字幕恢复沿用原流程。
+- 新 skill `Assets/Skills/video-generate-multilingual-subtitles` 基于法中生成和字幕润色规则编写，复用支持语言参数的转写脚本，随应用打包并安装至个人 skills 目录；旧 skill 保留。
+- `./scripts/check.sh`：92 passed, 0 failed。覆盖英语工程持久化、显示/样式、翻译目标及标点、同语言、旧工程兼容。
+- 最终 `./scripts/build-app.sh` 成功；`--check-multilingual -editor.interfaceLanguage zh/en` 均 MULTILINGUAL_OK：六种语言组合、同语言、缓存隔离、重试、选择默认值/恢复/取消及显示标签。使用本地替身转写/翻译工具，不调用模型或账户。
+- `./scripts/check-multitrack.sh` 双语通过，产物 `/tmp/video-editeur-multitrack.6kOGwh`；检查包含预览/导出和轨道移动回归。
+- skill quick_validate 与转写脚本 --help 通过；git diff --check 通过。没有实际转写或在线翻译质量验证。
+- 弹窗操作通过模拟模态响应检查；尝试的 NSView 截图未捕获完整系统控件，因此不作为视觉通过证据，未手工验收完整弹窗布局。
+
+## 2026-09-26 · Finder 文件直接拖入时间轴
+
+- 时间轴注册 fileURL 拖放，视频/音乐与素材列表共用文件类型校验和 appendMedia 导入入口；支持多文件，允许在字幕列表分类下向时间轴拖入。外部文件导入与内部素材卡片/跨轨移动分开处理。
+- 视频按素材列表规则追加主轨末尾，音乐在播放头处加入且保留源时长；导入经过现有 commit/撤销流程。可接收时高亮，忙碌或禁用状态拒绝；锁定主视频轨道时拒绝视频但允许音乐。
+- `./scripts/build-app.sh` 构建、打包、签名成功；`git diff --check` 通过。
+- `--check-timeline-file-drop -editor.interfaceLanguage zh/en` 均 TIMELINE_FILE_DROP_OK：通过真实 NSPasteboard 临时文件检查混合文件路由、纯音乐、字幕分类、busy/lock/disabled 与无效类型/目录/不存在路径。检查用回调记录导入路由，不实际解码这些占位媒体，不写用户工程。
+- `./scripts/check-multitrack.sh` 双语通过：原有跨轨拖动、取消、轨道控制及预览/导出回归正常。未手工从 Finder 拖拽验收。

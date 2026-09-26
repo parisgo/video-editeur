@@ -1,7 +1,13 @@
 import Foundation
 
-public enum Language: String, Codable, CaseIterable { case fr, zh
-    public var title: String { self == .fr ? L("法语") : L("中文") }
+public enum Language: String, Codable, CaseIterable { case fr, zh, en
+    public var title: String { self == .fr ? L("法语") : (self == .en ? L("英语") : L("中文")) }
+}
+
+public struct GenerationLanguages: Codable, Equatable {
+    public var source: Language
+    public var target: Language
+    public init(source: Language = .fr, target: Language = .zh) { self.source=source; self.target=target }
 }
 public struct RGBA: Codable, Equatable {
     public var r: Double; public var g: Double; public var b: Double; public var a: Double
@@ -34,7 +40,7 @@ public struct SubtitleStyle: Codable, Equatable {
     public static func standard(_ language: Language) -> Self {
         var s = Self()
         s.font = language == .fr ? "AvenirNextCondensed-Regular" : "ArialMT"
-        s.size = language == .fr ? 70 : 60
+        s.size = language == .zh ? 60 : 70
         s.width = 0.98
         if language == .zh { s.color = .black; s.background = RGBA(1,0.87,0.05); s.outlineWidth = 0; s.y = 0.075 }
         return s
@@ -80,12 +86,21 @@ public struct Project: Codable, Equatable {
     public var cues: [Cue] = []
     public var frenchStyle = SubtitleStyle.standard(.fr)
     public var chineseStyle = SubtitleStyle.standard(.zh)
+    public var englishStyle: SubtitleStyle?
+    public var showEnglish: Bool?
+    public var generationLanguages: GenerationLanguages?
+    public var subtitleLanguages: [Language] {
+        let pair=generationLanguages ?? GenerationLanguages()
+        var result=pair.source == pair.target ? [pair.source] : [pair.source,pair.target]
+        for language in Language.allCases where cues.contains(where: { $0.trackID == nil && $0.language == language }) && !result.contains(language) { result.append(language) }
+        return result
+    }
     public var showFrench = true
     public var showChinese = true
     public init() {}
-    public func style(for cue: Cue) -> SubtitleStyle { cue.style ?? tracks.first(where:{$0.id == cue.trackID})?.style ?? (cue.language == .fr ? frenchStyle : chineseStyle) }
+    public func style(for cue: Cue) -> SubtitleStyle { cue.style ?? tracks.first(where:{$0.id == cue.trackID})?.style ?? (cue.language == .fr ? frenchStyle : (cue.language == .en ? englishStyle ?? .standard(.en) : chineseStyle)) }
     public mutating func applyStyle(_ style: SubtitleStyle, to language: Language) {
-        if language == .fr { frenchStyle=style } else { chineseStyle=style }
+        if language == .fr { frenchStyle=style } else if language == .en { englishStyle=style } else { chineseStyle=style }
         for index in cues.indices where cues[index].trackID == nil && cues[index].language == language { cues[index].style=nil }
     }
     public mutating func applyStyle(_ style: SubtitleStyle, for cue: Cue) {
@@ -98,7 +113,10 @@ public struct Project: Codable, Equatable {
         a.trackID == b.trackID && (a.trackID != nil || a.language == b.language)
     }
     public func visible(_ cue: Cue) -> Bool { cue.trackID != nil || visible(cue.language) }
-    public func visible(_ language: Language) -> Bool { language == .fr ? showFrench : showChinese }
+    public func visible(_ language: Language) -> Bool { language == .fr ? showFrench : (language == .en ? showEnglish ?? true : showChinese) }
+    public mutating func setVisible(_ visible: Bool, for language: Language) {
+        switch language { case .fr: showFrench=visible; case .zh: showChinese=visible; case .en: showEnglish=visible }
+    }
     public var displayedCues: [Cue] {
         cues.filter { visible($0) }.sorted { $0.start == $1.start ? $0.language.rawValue < $1.language.rawValue : $0.start < $1.start }
     }
@@ -118,7 +136,7 @@ public struct Project: Codable, Equatable {
         let next = track.filter { $0.start >= start }.map(\.start).min() ?? duration
         let end = min(start + 2000, next, duration)
         guard end > start else { throw SubtitleError.invalid(L("当前位置没有可用时间区间")) }
-        return Cue(language: language, start: start, end: end, text: trackID != nil ? "添加说明文字" : (language == .zh ? "新的中文字幕" : "Nouveau sous-titre"), trackID:trackID)
+        return Cue(language: language, start: start, end: end, text: trackID != nil ? "添加说明文字" : (language == .zh ? "新的中文字幕" : (language == .en ? "New subtitle" : "Nouveau sous-titre")), trackID:trackID)
     }
     public func validate() throws {
         guard speed.isFinite,(0.25...2).contains(speed) else { throw SubtitleError.invalid(L("播放速度必须在 0.25 到 2 倍之间")) }
@@ -200,17 +218,17 @@ public enum Translator {
         let compact = normalized.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) }
         return compact.isEmpty ? nil : String(String.UnicodeScalarView(compact))
     }
-    public static func merge(_ translations: [Translation], source: [Cue]) throws -> [Cue] {
+    public static func merge(_ translations: [Translation], source: [Cue], target: Language = .zh) throws -> [Cue] {
         guard translations.count == source.count, Set(translations.map(\.id)) == Set(source.map(\.id)), Set(translations.map(\.id)).count == translations.count else { throw SubtitleError.invalid(L("翻译返回缺失或重复的字幕 ID")) }
         let map = Dictionary(uniqueKeysWithValues: translations.map { ($0.id, $0.text) })
         return try source.map { cue in
-            let text = map[cue.id]!.components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: "，").trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = map[cue.id]!.components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: target == .zh ? "，" : " ").trimmingCharacters(in: .whitespacesAndNewlines)
             let containsChinese = text.unicodeScalars.contains { (0x3400...0x9FFF).contains($0.value) }
             let equivalentNonverbal = nonverbalForm(cue.text).map { $0 == nonverbalForm(text) } ?? false
-            guard !text.isEmpty, containsChinese || equivalentNonverbal else {
+            guard !text.isEmpty, target != .zh || containsChinese || equivalentNonverbal else {
                 throw SubtitleError.invalid(L("字幕 {0} 的翻译为空或未包含中文，请重试该批次", [String(describing: SRT.timestamp(cue.start))]))
             }
-            return Cue(language: .zh, start: cue.start, end: cue.end, text: text)
+            return Cue(language: target, start: cue.start, end: cue.end, text: text)
         }
     }
 }

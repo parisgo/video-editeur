@@ -38,14 +38,14 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     }()
     let textTrackChoice=NSPopUpButton()
     let timeline=TimelineView(), timelineScroll=NSScrollView()
-    let titleLabel=label(L("字幕工坊"),size:18,bold:true), subtitleLabel=label(L("FR / ZH  ·  本地视频工作台"),size:10,color:muted)
+    let titleLabel=label(L("字幕工坊"),size:18,bold:true), subtitleLabel=label(L("多语言字幕 · 本地视频工作台"),size:10,color:muted)
     let fileLabel=label(L("尚未导入视频"),size:12,bold:true), statusLabel=label(L("准备就绪"),size:11,color:muted)
     let timeLabel=label("00:00:00 / 00:00:00",size:11,color:accent)
     let playbackSpeedChoice=NSPopUpButton()
     let playbackSpeeds: [Float]=[0.25,0.5,0.75,1,1.25,1.5,2]
     var playbackSpeed: Float { Float(project.speed) }
     let emptyTitle=label(L("让每一句话，都被看见"),size:24,color:.white,bold:true)
-    let emptyHint=label(L("拖入法语视频，开始制作中文与法语字幕"),size:13,color:muted)
+    let emptyHint=label(L("拖入视频，选择语言生成字幕"),size:13,color:muted)
     let progress=NSProgressIndicator(), scrub=NSSlider(), zoom=NSSlider()
     var importButton: ActionButton!, generateButton: ActionButton!, exportButton: ActionButton!, cancelButton: ActionButton!, playButton: ActionButton!
     let displayMode=NSSegmentedControl(labels:[L("法语"),L("中文")],trackingMode:.selectAny,target:nil,action:nil)
@@ -79,7 +79,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         if showsMedia {
             return project.renderPlacements.enumerated().map { i,p in LibraryEntry(title:"\(i+1). \(URL(fileURLWithPath:p.clip.path).lastPathComponent)",detail:L("{0} · {1} 秒", [String(describing: SRT.timestamp(p.start).prefix(8)), String(describing: String(format:"%.2f",Double(p.clip.duration)/1000))]),language:nil,trackID:nil,clipID:p.clip.id) } + project.music.map { music in LibraryEntry(title:URL(fileURLWithPath:music.path).lastPathComponent,detail:L("音乐")+" · "+String(format:"%.2f s",Double(music.duration)/1000),language:nil,trackID:nil,musicID:music.id) }
         }
-        var entries: [LibraryEntry] = project.videoPath.isEmpty ? [] : [Language.fr, .zh].map { language in
+        var entries: [LibraryEntry] = project.videoPath.isEmpty ? [] : project.subtitleLanguages.map { language in
             LibraryEntry(title:language.title+" · "+L("字幕"),detail:L("{0} 条字幕", [String(describing: project.cues.filter{$0.trackID == nil && $0.language == language}.count)]),language:language,trackID:nil)
         }
         entries += project.tracks.map { track in
@@ -103,7 +103,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         for pane in [header,left,center,right,bottom] { pane.wantsLayer=true; pane.layer?.backgroundColor=panelColor.cgColor; pane.layer?.cornerRadius=8; root.addSubview(pane) }
         header.layer?.backgroundColor=NSColor.clear.cgColor
         importButton=ActionButton(L("导入视频"),symbol:"plus",action:{[weak self] in self?.importVideo()})
-        generateButton=ActionButton(L("生成法中字幕"),symbol:"sparkles",action:{[weak self] in self?.generate()})
+        generateButton=ActionButton(L("生成字幕"),symbol:"sparkles",action:{[weak self] in self?.generate()})
         exportButton=ActionButton(L("导出视频"),symbol:"square.and.arrow.up",action:{[weak self] in self?.exportVideo()}); exportButton.contentTintColor=accent
         let new=ActionButton(L("新建"),symbol:"doc.badge.plus",action:{[weak self] in self?.newProject()}); new.identifier=NSUserInterfaceItemIdentifier("newProject")
         let save=ActionButton(L("保存"),symbol:"square.and.arrow.down",action:{[weak self] in self?.saveProject()}); save.identifier=NSUserInterfaceItemIdentifier("save")
@@ -126,12 +126,12 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         mediaSearch.placeholderString=L("搜索文件名"); mediaSearch.target=self; mediaSearch.action=#selector(mediaSearchChanged(_:))
         mediaSearch.sendsSearchStringImmediately=true
         mediaGrid.canDrop={[weak self] urls in
-            guard let self,!self.busy,self.showsMedia else { return false }
-            return !self.project.isVideoLocked || urls.allSatisfy { url in
-                (try? url.resourceValues(forKeys:[.contentTypeKey]).contentType?.conforms(to:.audio)) == true
-            }
+            guard let self,self.showsMedia else { return false }
+            return self.canImportMediaFiles(urls)
         }
         mediaGrid.dropFiles={[weak self] urls in self?.appendMedia(urls) ?? false }
+        timeline.canDropFiles={[weak self] urls in self?.canImportMediaFiles(urls) ?? false }
+        timeline.dropFiles={[weak self] urls in self?.appendMedia(urls) ?? false }
 
 
         table.headerView=nil; table.backgroundColor = .clear; table.rowHeight=61; table.intercellSpacing=NSSize(width:0,height:3)
@@ -550,7 +550,9 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         timeline.project=project; timeline.selectedClip=selectedClip; timeline.selected=selected; timeline.current=current; resizeTimeline()
         emptyTitle.isHidden = !project.videoPath.isEmpty; emptyHint.isHidden=emptyTitle.isHidden
         for control in [displayMode] {
-            control.setSelected(project.showFrench,forSegment:0); control.setSelected(project.showChinese,forSegment:1); control.isEnabled = !busy
+            control.segmentCount=project.subtitleLanguages.count
+            for (i,language) in project.subtitleLanguages.enumerated() { control.setLabel(language.title,forSegment:i); control.setSelected(project.visible(language),forSegment:i) }
+            control.isEnabled = !busy
         }
         languageChoice.isEnabled = !busy
         (left.subviews.first{$0.identifier?.rawValue == "delete"})?.isHidden=showsMedia
@@ -606,11 +608,11 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         let old=project
         if old.clips != next.clips || old.layers != next.layers || old.music != next.music || old.isVideoMuted != next.isVideoMuted || old.isVideoHidden != next.isVideoHidden {
             do { try installPreview(for:next) } catch { showError(error); return }
-            retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成法中字幕")
+            retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成字幕")
         }
         history.registerUndo(withTarget:self) { target in target.commit(old,name:name); target.refreshInspector() }; history.setActionName(name)
         project=next
-        if !busy && retryDirectory != nil && next.cues != old.cues { retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成法中字幕") }
+        if !busy && retryDirectory != nil && next.cues != old.cues { retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成字幕") }
         refresh(); scheduleSave()
     }
     func updateCue(_ id: UUID, _ edit: (inout Cue,Project)->Void) {
@@ -714,15 +716,15 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     }
     func addSubtitle() {
         guard !busy else { return }
-        guard project.showFrench || project.showChinese else { showError(SubtitleError.invalid(L("请先选中法语或中文"))); return }
-        let language: Language = project.visible(preferredLanguage) ? preferredLanguage : (project.showFrench ? .fr : .zh)
+        guard project.subtitleLanguages.contains(where: { project.visible($0) }) else { showError(SubtitleError.invalid(L("请先选择要显示的字幕语言"))); return }
+        let language: Language = project.subtitleLanguages.contains(preferredLanguage) && project.visible(preferredLanguage) ? preferredLanguage : project.subtitleLanguages.first(where: { project.visible($0) })!
         do { let cue=try project.newCue(language:language,at:current); var next=project; next.cues.append(cue); commit(next,name:L("添加字幕")); select(cue.id) } catch { showError(error) }
     }
     func deleteSubtitle() { guard !busy,let id=selected else { return }; var next=project; next.cues.removeAll{$0.id == id}; selected=nil; commit(next,name:L("删除字幕")); refreshInspector() }
     @objc func modeChanged(_ sender: NSSegmentedControl) {
         guard !busy else { refresh(); return }
-        var next=project; next.showFrench=sender.isSelected(forSegment:0); next.showChinese=sender.isSelected(forSegment:1)
-        if sender.selectedSegment >= 0, sender.isSelected(forSegment:sender.selectedSegment) { preferredLanguage=sender.selectedSegment == 0 ? .fr : .zh }
+        var next=project; for (i,language) in project.subtitleLanguages.enumerated() { next.setVisible(sender.isSelected(forSegment:i),for:language) }
+        if sender.selectedSegment >= 0, sender.isSelected(forSegment:sender.selectedSegment) { preferredLanguage=project.subtitleLanguages[sender.selectedSegment] }
         commit(next,name:L("切换字幕显示")); followCurrentSubtitles(); refreshInspector()
     }
     @objc func zoomChanged() { timeline.pointsPerSecond=zoom.doubleValue; resizeTimeline() }
@@ -756,7 +758,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         if !preservingProject {
             archiveCurrentProject()
             timeline.subtitleTracksRequested=false
-            project=Project(); project.duration=Int64(seconds*1000); project.videoPath=url.path; projectURL=nil; UserDefaults.standard.removeObject(forKey:"projectURL"); selected=nil; history.removeAllActions(); retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成法中字幕")
+            project=Project(); project.duration=Int64(seconds*1000); project.videoPath=url.path; projectURL=nil; UserDefaults.standard.removeObject(forKey:"projectURL"); selected=nil; history.removeAllActions(); retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); generateButton.title=L("生成字幕")
         } else {
             guard abs(Int64(seconds*1000)-project.duration) <= 1000 else { showError(SubtitleError.invalid(L("所选视频时长与工程不一致，请选择原视频"))); return }
             project.videoPath=url.path
@@ -848,7 +850,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         timelineScroll.contentView.scroll(to:.zero); timelineScroll.reflectScrolledClipView(timelineScroll.contentView)
         overlay.videoSize=CGSize(width:16,height:9); overlay.hitBoxes=[]
         languageChoice.selectedSegment=0
-        generateButton.title=L("生成法中字幕")
+        generateButton.title=L("生成字幕")
         playButton.image=NSImage(systemSymbolName:"play.fill",accessibilityDescription:L("播放"))
         for field in [startField,endField,sizeField,widthField,outlineField,xField,yField] { field.stringValue="" }
         fontChoice.selectItem(at:0); alignmentChoice.selectedSegment=1
@@ -879,29 +881,59 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
         if value && indeterminate { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         refresh(); refreshInspector()
     }
+    func chooseGenerationLanguages() -> GenerationLanguages? {
+        let alert=NSAlert(); alert.messageText=L("生成字幕")
+        alert.informativeText=L("选择视频语言和目标语言；相同语言只生成转写字幕。")
+        let box=NSView(frame:NSRect(x:0,y:0,width:370,height:90))
+        let source=NSPopUpButton(frame:NSRect(x:140,y:50,width:220,height:28))
+        let target=NSPopUpButton(frame:NSRect(x:140,y:10,width:220,height:28))
+        let sources: [Language]=[.fr,.en], targets: [Language]=[.zh,.en,.fr]
+        source.addItems(withTitles:sources.map(\.title)); target.addItems(withTitles:targets.map(\.title))
+        let defaults=project.generationLanguages ?? GenerationLanguages()
+        source.selectItem(at:sources.firstIndex(of:defaults.source) ?? 0); target.selectItem(at:targets.firstIndex(of:defaults.target) ?? 0)
+        for (title,y) in [(L("视频语言"),54.0),(L("目标语言"),14.0)] {
+            let text=label(title,size:12); text.frame=NSRect(x:0,y:y,width:135,height:24); box.addSubview(text)
+        }
+        box.addSubview(source); box.addSubview(target); alert.accessoryView=box
+        alert.addButton(withTitle:L("生成")); alert.addButton(withTitle:L("取消"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return GenerationLanguages(source:sources[source.indexOfSelectedItem],target:targets[target.indexOfSelectedItem])
+    }
     func generate() {
         guard !busy,!project.videoPath.isEmpty else { return }
-        timeline.subtitleTracksRequested=true
-        refresh()
-        if retryDirectory == nil && !project.cues.isEmpty {
+        guard let languages=chooseGenerationLanguages() else { return }
+        let cachedLanguages=retryDirectory.flatMap { try? Data(contentsOf:$0.appendingPathComponent("languages.json")) }.flatMap { try? JSONDecoder().decode(GenerationLanguages.self,from:$0) } ?? GenerationLanguages()
+        let retry=languages == cachedLanguages ? retryDirectory : nil
+        if retry == nil && project.cues.contains(where: { $0.trackID == nil }) {
             let alert=NSAlert(); alert.messageText=L("重新生成将替换现有字幕"); alert.informativeText=L("人工修改的字幕将被替换，完成后可通过撤销恢复。"); alert.addButton(withTitle:L("重新生成")); alert.addButton(withTitle:L("取消"))
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
         do { try ToolSettings.current.validate() } catch { showError(error); return }
-        let original=project, job=GenerationJob(directory:retryDirectory ?? supportDirectory.appendingPathComponent("Jobs/\(UUID().uuidString)"))
+        let original=project, job=GenerationJob(directory:retry ?? supportDirectory.appendingPathComponent("Jobs/\(UUID().uuidString)"),languages:languages)
+        var generated=project; generated.generationLanguages=languages
+        for language in [languages.source,languages.target] { generated.setVisible(true,for:language) }
+        if languages.source != .zh && languages.target != .zh && languages.source != languages.target {
+            let cue=Cue(language:languages.target,start:0,end:1,text:"")
+            if generated.style(for:cue) == SubtitleStyle.standard(languages.target) {
+                var style=generated.style(for:cue); style.y=0.075; generated.applyStyle(style,to:languages.target)
+            }
+        }
+        let generationProject=generated
+        project=generated
+        timeline.subtitleTracksRequested=true
         generation=job; retryDirectory=job.directory; UserDefaults.standard.set(job.directory.path,forKey:"pendingJob"); setBusy(true); player.pause()
         DispatchQueue.global(qos:.userInitiated).async { [weak self] in
             do {
                 let transcriptionInput=try self?.prepareTranscriptionInput(project:original,job:job) ?? URL(fileURLWithPath:original.videoPath)
-                let result=try job.run(video:transcriptionInput,duration:original.duration,status:{ message in DispatchQueue.main.async { self?.statusLabel.stringValue=message } },partial:{ cues in DispatchQueue.main.async { guard let self else { return }; self.project.cues=cues+original.cues.filter{$0.trackID != nil}; self.selected=nil; self.refresh(); self.scheduleSave() } })
+                let result=try job.run(video:transcriptionInput,duration:original.duration,status:{ message in DispatchQueue.main.async { self?.statusLabel.stringValue=message } },partial:{ cues in DispatchQueue.main.async { guard let self, self.generation === job else { return }; self.project=generationProject; self.project.cues=cues+original.cues.filter{$0.trackID != nil}; self.selected=nil; self.refresh(); self.scheduleSave() } })
                 DispatchQueue.main.async {
-                    guard let self else { return }; self.project=original; var next=original; next.cues=result+original.cues.filter{$0.trackID != nil}; self.commit(next,name:L("生成法中字幕"))
-                    self.generation=nil; self.retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); self.generateButton.title=L("生成法中字幕"); self.setBusy(false); self.statusLabel.stringValue=L("法中字幕已生成 · {0} 组", [String(describing: result.count/2)]); self.persistNow()
+                    guard let self, self.generation === job else { return }; self.project=original; var next=generationProject; next.cues=result+original.cues.filter{$0.trackID != nil}; self.commit(next,name:L("生成字幕"))
+                    self.generation=nil; self.retryDirectory=nil; UserDefaults.standard.removeObject(forKey:"pendingJob"); self.generateButton.title=L("生成字幕"); self.setBusy(false); self.statusLabel.stringValue=L("字幕已生成 · {0} 条", [String(result.count)]); self.persistNow()
                     if let first=result.first { self.select(first.id) }
                 }
             } catch {
                 DispatchQueue.main.async {
-                    guard let self else { return }
+                    guard let self, self.generation === job else { return }
                     let partial=self.project; self.project=original; self.commit(partial,name:L("生成部分字幕"))
                     self.generation=nil; self.setBusy(false); self.generateButton.title=L("继续字幕生成"); self.statusLabel.stringValue=L("生成已停止 · 已保留完成的字幕，可继续重试")
                     self.persistNow(); if !job.runner.isCancelled { self.showError(error) }
@@ -912,7 +944,7 @@ final class EditorController: NSViewController, NSTableViewDataSource, NSTableVi
     func exportVideo() {
         guard !busy,!project.videoPath.isEmpty else { return }
         guard let color=chooseExportColor() else { return }
-        let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=URL(fileURLWithPath:project.videoPath).deletingPathExtension().lastPathComponent+"-法中字幕.mp4"
+        let panel=NSSavePanel(); panel.allowedContentTypes=[.mpeg4Movie]; panel.nameFieldStringValue=URL(fileURLWithPath:project.videoPath).deletingPathExtension().lastPathComponent+"-subtitles.mp4"
         guard panel.runModal() == .OK,let url=panel.url else { return }
         let snapshot=project, job=VideoExporter(); exporter=job; setBusy(true,indeterminate:false); progress.doubleValue=0; statusLabel.stringValue=L("正在导出 {0}…", [String(describing: color.title)])
         DispatchQueue.global(qos:.userInitiated).async { [weak self] in

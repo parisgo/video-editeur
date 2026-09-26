@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | **English**
 
-A native macOS video editor built with Swift and AppKit, featuring French–Chinese subtitles, a dark three-pane workspace, AVPlayer preview, a bilingual timeline, and burned-in video export using H.264/AAC or 10-bit HEVC.
+A native macOS video editor built with Swift and AppKit, featuring French, English, and Chinese subtitles, a dark three-pane workspace, AVPlayer preview, a bilingual timeline, and burned-in video export using H.264/AAC or 10-bit HEVC.
 
 ![Video Éditeur workspace](Assets/Photo/pic_1_en.png)
 
@@ -27,11 +27,11 @@ The icon source is `Assets/Brand/video-editeur-logo-v1.png`. The packaging scrip
 ## Basic workflow
 
 1. **Import Video**, or drag an MP4/MOV into the preview. This starts a new project. To append video or music to the current project, use **Media → Add Media** or the corresponding command in the video editing menu (`⌘I`). Multiple files can be selected.
-2. FR/ZH timeline rows are hidden in a new project until you click **Generate FR/ZH**; projects with existing subtitles show them automatically. Generate French–Chinese subtitles. The app extracts audio, transcribes French using the installed skill's Whisper script, and translates through your signed-in Codex session. The status bar shows progress; generation can be cancelled.
+2. Click **Generate Subtitles** to choose the video language (**French / English**) and target (**Chinese / English / French**), defaulting to **French → Chinese** in a new project. Matching languages produce transcription only. Subtitle timeline rows appear for the chosen languages; existing subtitle projects show their rows automatically. Whisper transcribes locally, then your signed-in Codex translates using the bundled `video-generate-multilingual-subtitles` skill. Generation can be cancelled and retried; changing languages starts a separate job so cached translations cannot be mixed. The selected pair is saved with the project.
 3. Switch between **Media** and **Subtitles** in the left panel. Media lists video and music; Subtitles lists language and text tracks with cue counts, rather than every subtitle line. Selecting a track selects its current or first cue. Select individual cues in the timeline or preview, then edit text, start/end times, font, size, color, outline, background, and position in the right panel. Press Return to commit numeric values.
 4. Drag subtitle clips to move them in time, or drag their edges to change duration. Cues on the same language track cannot overlap. In the preview, drag text to move it, corner handles to resize the font, and side handles to adjust text-box width and wrapping without changing font size. Properties update during dragging; one undo restores the entire drag. Use the timeline slider to zoom.
 5. Select a subtitle track and click **Add** to insert a cue of up to two seconds at the playhead. Use the trash button to delete the selected cue. Undo and redo are available with `⌘Z` and `⇧⌘Z`.
-6. The preview's **French / Chinese** switches are independent: enable either language, both, or neither. The timeline, preview, and export respect this choice; switching the left panel category does not change it. The timeline and properties follow the current subtitle during playback or seeking, but preview selection outlines are hidden while playing. Editing text or time values pauses playback. Style changes apply to every cue on the same language track and clear its individual style overrides; text and timing changes affect only the selected cue.
+6. The preview's language switches are independent: enable either language, both, or neither. The timeline, preview, and export respect this choice; switching the left panel category does not change it. The timeline and properties follow the current subtitle during playback or seeking, but preview selection outlines are hidden while playing. Editing text or time values pauses playback. Style changes apply to every cue on the same language track and clear its individual style overrides; text and timing changes affect only the selected cue.
 7. **Save** creates a `.frzh` project; reopen it with `⇧⌘O`. Launching the app starts a blank new project instead of restoring the previous session. Closing the window or quitting prompts to Save, Don’t Save, or Cancel when there are unsaved changes. Cancelling the save dialog also cancels quitting. Autosave writes only a recovery copy and does not overwrite the explicitly saved project; use Open Project to open saved `.frzh` files or `~/Library/Application Support/VideoEditeur/Recovery.frzh` manually. Missing video or music files can be relocated.
 8. **Export Video** creates an MP4 with visible subtitles, text, and styles burned in. Editing is disabled during export. The destination is replaced only after success; cancellation preserves an existing destination file.
 
@@ -119,7 +119,7 @@ This is a solid-color cover suited to uniform news banners, not texture reconstr
 
 Chinese is the default regardless of the macOS language. Choose **中文 / English** under the app's interface-language menu or in settings, then restart the app. The choice persists.
 
-English covers app menus, panels, editing controls, generation progress, and application errors. Native file dialogs follow macOS. Interface language does not translate existing subtitles, project names, or paths, and does not change French–Chinese generation targets.
+English covers app menus, panels, editing controls, generation progress, and application errors. Native file dialogs follow macOS. Interface language does not translate existing subtitles, project names, or paths, and does not change the generation language selection.
 
 ## Local dependencies and project data
 
@@ -129,7 +129,7 @@ Configure paths through the toolbar gear or `⌘,`:
 | --- | --- |
 | ffmpeg | `/opt/homebrew/bin/ffmpeg`; used for audio extraction, no libass required |
 | Python | `/opt/homebrew/anaconda3/bin/python3`; requires `mlx-whisper` or `faster-whisper` |
-| Codex | `/Applications/ChatGPT.app/Contents/Resources/codex`; sign in beforehand; uses your default model and existing session, no API key required |
+| Codex | Keeps an executable configured path; otherwise detects ChatGPT/Codex app bundles in `/Applications` and `~/Applications`, PATH, and common CLI install locations. Settings shows the detected path; if none is found, configure it manually. Sign in beforehand; uses your default model and existing session, no API key required |
 | Subtitle skill | `~/.codex/skills/video-generate-fr-zh-subtitles`; requires `SKILL.md` and `scripts/transcribe_srt.py` |
 
 Transcription runs locally and may download a Whisper model on first use. Subtitle text is sent to Codex for online translation and uses account quota; source video and audio are not sent to Codex. Codex runs read-only and returns structured translations with IDs, rather than executing media commands.
@@ -170,3 +170,7 @@ See [VALIDATION.md](VALIDATION.md) for recorded results and limitations. Real ge
 Subtitle times use integer milliseconds and half-open intervals `[start, end)`. Stable UUIDs associate transcriptions with translations. French and Chinese tracks are edited separately. Export captures a project snapshot, applies source rotation, and rounds dimensions to even values for H.264 encoding.
 
 See [AGENTS.md](AGENTS.md) for repository conventions covering compatibility, undo, preview/export consistency, music duration, and verification. Documentation-only changes do not require an application rebuild.
+
+The new skill source is `Assets/Skills/video-generate-multilingual-subtitles/` and is bundled at build time. Default/legacy skill paths use the bundled version; custom transcription-script paths remain usable. Translation uses the bundled multilingual rules. English subtitles default to Arial, size 70, width 98%.
+
+Drag video or music files directly from Finder onto the timeline to import them, just like dropping onto Media. Multiple files can be dropped together: videos append to the main video track, and music starts at the playhead with its full source duration. Valid drops highlight the timeline. During generation/export, drops are disabled; locking the main video track blocks video imports but still allows audio. Imported media appears in the library and supports undo.

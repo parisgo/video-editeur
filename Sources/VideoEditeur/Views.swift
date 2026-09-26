@@ -240,8 +240,20 @@ final class PreviewOverlay: NSView {
 
 }
 final class TimelineView: NSView {
+    var canDropFiles: (([URL])->Bool)?
+    var dropFiles: (([URL])->Bool)?
+    private var fileDropHighlighted=false { didSet { needsDisplay=true } }
+    func acceptsFileDrop(_ pasteboard: NSPasteboard) -> Bool {
+        let urls=mediaFileURLs(from:pasteboard)
+        return editingEnabled && !urls.isEmpty && canDropFiles?(urls) == true
+    }
+    func importFileDrop(_ pasteboard: NSPasteboard) -> Bool {
+        guard acceptsFileDrop(pasteboard) else { return false }
+        return dropFiles?(mediaFileURLs(from:pasteboard)) ?? false
+    }
+
     var subtitleTracksRequested = false
-    var subtitleRowCount: Int { subtitleTracksRequested || project.cues.contains(where: { $0.trackID == nil }) ? 2 : 0 }
+    var subtitleRowCount: Int { subtitleTracksRequested || project.cues.contains(where: { $0.trackID == nil }) ? project.subtitleLanguages.count : 0 }
     var transferVideoClip: ((UUID,VideoTrackDestination,Int64)->Void)?
     private var bodyDrag: (id:UUID,origin:CGFloat,originY:CGFloat,start:Int64,base:Project)?
     private var pendingTransfer: (VideoTrackDestination,Int64)?
@@ -256,8 +268,8 @@ final class TimelineView: NSView {
     private var pendingLayerMove: VideoLayer?
     private var layerDropTime: Int64? { didSet { needsDisplay=true } }
     private var dropIndex: Int? { didSet { needsDisplay=true } }
-    override init(frame: NSRect) { super.init(frame:frame); registerForDraggedTypes([mediaClipDragType]) }
-    required init?(coder: NSCoder) { super.init(coder:coder); registerForDraggedTypes([mediaClipDragType]) }
+    override init(frame: NSRect) { super.init(frame:frame); registerForDraggedTypes([mediaClipDragType,.fileURL]) }
+    required init?(coder: NSCoder) { super.init(coder:coder); registerForDraggedTypes([mediaClipDragType,.fileURL]) }
     private func mediaDrop(_ sender: NSDraggingInfo) -> (UUID,Int)? {
         let point=convert(sender.draggingLocation,from:nil)
         guard editingEnabled,point.x>=leading,
@@ -278,16 +290,23 @@ final class TimelineView: NSView {
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         if let event=NSApp.currentEvent { autoscroll(with:event) }
+        if sender.draggingPasteboard.availableType(from:[mediaClipDragType]) == nil {
+            dropIndex=nil; layerDropTime=nil; dropTrackID=nil
+            fileDropHighlighted=acceptsFileDrop(sender.draggingPasteboard)
+            return fileDropHighlighted ? .copy : []
+        }
+        fileDropHighlighted=false
         let drop=mediaDrop(sender)
         dropIndex=drop?.1
         dropTrackID=drop?.1 == -2 ? trackID(at:convert(sender.draggingLocation,from:nil).y) : nil
         layerDropTime=(drop?.1 ?? 0)<0 ? max(0,Int64((convert(sender.draggingLocation,from:nil).x-leading)/pointsPerSecond*1000)) : nil
         return drop == nil ? [] : .copy
     }
-    override func draggingExited(_ sender: NSDraggingInfo?) { dropIndex=nil; layerDropTime=nil; dropTrackID=nil }
-    override func draggingEnded(_ sender: NSDraggingInfo) { dropIndex=nil; layerDropTime=nil; dropTrackID=nil }
+    override func draggingExited(_ sender: NSDraggingInfo?) { dropIndex=nil; layerDropTime=nil; dropTrackID=nil; fileDropHighlighted=false }
+    override func draggingEnded(_ sender: NSDraggingInfo) { dropIndex=nil; layerDropTime=nil; dropTrackID=nil; fileDropHighlighted=false }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        defer { dropIndex=nil; layerDropTime=nil; dropTrackID=nil }
+        defer { dropIndex=nil; layerDropTime=nil; dropTrackID=nil; fileDropHighlighted=false }
+        if sender.draggingPasteboard.availableType(from:[mediaClipDragType]) == nil { return importFileDrop(sender.draggingPasteboard) }
         guard let (id,index)=mediaDrop(sender) else { return false }
         if index<0 {
             let time=max(0,Int64((convert(sender.draggingLocation,from:nil).x-leading)/pointsPerSecond*1000))
@@ -405,7 +424,7 @@ final class TimelineView: NSView {
     var newLayerY: CGFloat { videoY+videoHeight+11+CGFloat(project.music.count)*44 }
     var contentHeight: CGFloat { newLayerY+60 }
     func rect(_ cue: Cue) -> CGRect {
-        let row=cue.trackID.flatMap { id in project.tracks.firstIndex(where:{$0.id == id}) }.map{$0+subtitleRowCount} ?? (cue.language == .fr ? 0 : 1)
+        let row=cue.trackID.flatMap { id in project.tracks.firstIndex(where:{$0.id == id}) }.map{$0+subtitleRowCount} ?? (project.subtitleLanguages.firstIndex(of:cue.language) ?? 0)
         return CGRect(x:x(cue.start),y:47+CGFloat(row)*44,width:max(2,x(cue.end)-x(cue.start)),height:32)
     }
     private func edgeHandle(_ cue: Cue, left: Bool) -> CGRect {
@@ -436,7 +455,7 @@ final class TimelineView: NSView {
             text(String(format:"%02d:%02d",sec/60,sec%60),CGRect(x:px+4,y:8,width:55,height:16))
         } }
         if subtitleRowCount > 0 {
-            for (title,y) in [(L("FR · 法语"),55.0),(L("ZH · 中文"),99.0)] { text(title,CGRect(x:10,y:y,width:70,height:20)) }
+            for (i,language) in project.subtitleLanguages.enumerated() { text(language.rawValue.uppercased()+" · "+language.title,CGRect(x:10,y:55+CGFloat(i)*44,width:70,height:20)) }
         }
         text(L("视频")+" 1",CGRect(x:10,y:videoY+14,width:70,height:20))
         for (i,track) in project.tracks.enumerated() { text(track.name,CGRect(x:10,y:55+CGFloat(subtitleRowCount+i)*44,width:70,height:20),accent) }
@@ -553,6 +572,10 @@ final class TimelineView: NSView {
             let px=x(time); accent.setFill()
             CGRect(x:px-2,y:videoY-6,width:4,height:videoHeight+12).fill()
             CGRect(x:px-6,y:videoY-6,width:12,height:4).fill()
+        }
+        if fileDropHighlighted {
+            accent.withAlphaComponent(0.12).setFill(); visibleRect.fill()
+            accent.setStroke(); let border=NSBezierPath(roundedRect:visibleRect.insetBy(dx:2,dy:2),xRadius:6,yRadius:6); border.lineWidth=2; border.stroke()
         }
         let px=x(current); accent.setFill(); CGRect(x:px,y:29,width:1.5,height:bounds.height-29).fill()
         let head=NSBezierPath(); head.move(to:CGPoint(x:px-5,y:25)); head.line(to:CGPoint(x:px+5,y:25)); head.line(to:CGPoint(x:px,y:33)); head.close(); head.fill()

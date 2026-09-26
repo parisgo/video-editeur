@@ -6,6 +6,7 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.build/swift-cache"
 swift build --disable-sandbox -c release --product VideoEditeur
 APP="$PWD/dist/VideoEditeur.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+ditto Assets/Skills/video-generate-multilingual-subtitles "$APP/Contents/Resources/SubtitleSkill"
 cp .build/release/VideoEditeur "$APP/Contents/MacOS/VideoEditeur"
 ICON_SOURCE="$PWD/Assets/Brand/video-editeur-logo-v1.png"
 ICON_SET="$PWD/.build/AppIcon.iconset"
